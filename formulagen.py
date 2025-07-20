@@ -46,6 +46,78 @@ def parse_mchain_command(line):
         }
     return None
 
+def parse_pct_command(line):
+    """Parse percentage change commands like: set growth = pct(series, 4)"""
+    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*pct\(([a-zA-Z0-9_]+)(?:,\s*([0-9]+))?\)', line)
+    if m:
+        return {
+            'type': 'pct',
+            'target': m.group(1),
+            'refs': [m.group(2)],
+            'params': [m.group(3) or '1']  # default lag of 1
+        }
+    return None
+
+def parse_interp_command(line):
+    """Parse interpolation commands like: set filled = interp(series, linear)"""
+    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*interp\(([a-zA-Z0-9_]+)(?:,\s*([a-zA-Z]+))?\)', line)
+    if m:
+        return {
+            'type': 'interp',
+            'target': m.group(1),
+            'refs': [m.group(2)],
+            'params': [m.group(3) or 'linear']  # default method
+        }
+    return None
+
+def parse_overlay_command(line):
+    """Parse overlay commands like: set combined = overlay(series1, series2)"""
+    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*overlay\(([a-zA-Z0-9_]+),\s*([a-zA-Z0-9_]+)\)', line)
+    if m:
+        return {
+            'type': 'overlay',
+            'target': m.group(1),
+            'refs': [m.group(2), m.group(3)],
+            'params': []
+        }
+    return None
+
+def parse_mave_command(line):
+    """Parse moving average commands like: set smooth = mave(series, 12)"""
+    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*mave\(([a-zA-Z0-9_]+),\s*([0-9]+)\)', line)
+    if m:
+        return {
+            'type': 'mave',
+            'target': m.group(1),
+            'refs': [m.group(2)],
+            'params': [m.group(3)]  # window size
+        }
+    return None
+
+def parse_mavec_command(line):
+    """Parse centered moving average commands like: set centered = mavec(series, 12)"""
+    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*mavec\(([a-zA-Z0-9_]+),\s*([0-9]+)\)', line)
+    if m:
+        return {
+            'type': 'mavec',
+            'target': m.group(1),
+            'refs': [m.group(2)],
+            'params': [m.group(3)]  # window size
+        }
+    return None
+
+def parse_copy_command(line):
+    """Parse copy commands like: set backup = copy(original)"""
+    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*copy\(([a-zA-Z0-9_]+)\)', line)
+    if m:
+        return {
+            'type': 'copy',
+            'target': m.group(1),
+            'refs': [m.group(2)],
+            'params': []
+        }
+    return None
+
 def parse_simple_command(line):
     if re.match(r'[a-zA-Z0-9_]+\s*=\s*\{.+\}', line):
         return None
@@ -63,6 +135,12 @@ def parse_command(line):
         parse_fishvol_list_command,
         parse_convert_command,
         parse_mchain_command,
+        parse_pct_command,
+        parse_interp_command,
+        parse_overlay_command,
+        parse_mave_command,
+        parse_mavec_command,
+        parse_copy_command,
         parse_simple_command
     ]:
         result = parser(line)
