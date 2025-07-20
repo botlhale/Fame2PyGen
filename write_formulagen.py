@@ -1,0 +1,213 @@
+import re
+import polars as pl
+import formulagen
+
+def preprocess_commands(fame_script):
+    lines = fame_script.strip().split('\n')
+    alias_dict = {}
+    expanded_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*\{(.+)\}', line)
+        if m:
+            var = m.group(1)
+            items = [item.strip() for item in m.group(2).split(',')]
+            alias_dict[var] = items
+            i += 1
+            continue
+        expanded_lines.append(line)
+        i += 1
+
+    def resolve_alias(alias):
+        if alias not in alias_dict:
+            return [alias]
+        result = []
+        for item in alias_dict[alias]:
+            if item in alias_dict:
+                result.extend(resolve_alias(item))
+            else:
+                result.append(item)
+        return result
+
+    for k in alias_dict:
+        alias_dict[k] = resolve_alias(k)
+
+    final_cmds = []
+    i = 0
+    while i < len(expanded_lines):
+        line = expanded_lines[i]
+        loop_m = re.match(r'loop\s+([a-zA-Z0-9_]+)\s+as\s+([a-zA-Z0-9_]+):', line)
+        if loop_m:
+            alias = loop_m.group(1)
+            varname = loop_m.group(2)
+            block = []
+            i += 1
+            while not expanded_lines[i].startswith('end loop'):
+                block.append(expanded_lines[i])
+                i += 1
+            if 'fishvol' in block[0]:
+                for a in alias_dict[alias]:
+                    new_block = [b.replace(varname, a) for b in block]
+                    final_cmds.extend(new_block)
+            else:
+                for item in alias_dict[alias]:
+                    for b in block:
+                        final_cmds.append(b.replace(varname, item))
+            i += 1
+            continue
+        final_cmds.append(line)
+        i += 1
+
+    parsed = [formulagen.parse_command(cmd) for cmd in final_cmds if formulagen.parse_command(cmd)]
+    return parsed, alias_dict
+
+def get_computation_levels(parsed_commands):
+    all_targets = set()
+    for c in parsed_commands:
+        if c['type'] == 'declaration':
+            all_targets.update(c['targets'])
+        elif 'target' in c:
+            all_targets.add(c['target'])
+    all_refs = set()
+    for c in parsed_commands:
+        for ref in c.get('refs', []):
+            all_refs.add(ref)
+    decls = [t for c in parsed_commands if c['type'] == 'declaration' for t in c['targets']]
+    input_vars = sorted(list(all_refs - all_targets))
+    deps = {}
+    for c in parsed_commands:
+        if c['type'] == 'declaration':
+            continue
+        if 'target' in c:
+            deps[c['target']] = set([r for r in c.get('refs', []) if r in all_targets])
+    levels = []
+    available = set(decls + input_vars)
+    remaining = set(deps.keys())
+    if decls:
+        levels.append(decls)
+    while remaining:
+        level = []
+        for t in list(remaining):
+            needed = deps.get(t, set())
+            if needed.issubset(available):
+                level.append(t)
+        if not level:
+            missing = set()
+            for t in remaining:
+                needed = deps.get(t, set())
+                missing.update(needed - available)
+            raise Exception(f"Circular or missing dependencies! Missing: {missing}")
+        levels.append(level)
+        available.update(level)
+        for t in level:
+            remaining.remove(t)
+    return levels
+
+def generate_formulas_py():
+    return '''import polars as pl
+import ple
+
+def CONVERT(df, series, freq, method, period):
+    if freq == 'q':
+        df_c = df.filter(pl.col("date").dt.is_quarter_end())
+    elif freq == 'a':
+        df_c = df.filter(pl.col("date").dt.is_year_end())
+    else:
+        df_c = df
+    return ple.convert(df_c[series], freq, method, period)
+
+def FISHVOL(df, vol_list, price_list, year=None):
+    if year is not None:
+        df = df.filter(pl.col("date") > f"{year}-01-01")
+    pairs = [(df[v], df[p]) for v, p in zip(vol_list, price_list)]
+    return ple.fishvol(pairs, year=year)
+
+def CHAIN(df, series_list, base_year):
+    series_objs = [df[col] for col in series_list]
+    return ple.chain(series_objs, base_year)
+
+def SUM_HORIZONTAL(df, cols):
+    return pl.sum_horizontal([df[col] for col in cols])
+
+def DECLARE_SERIES(df, name):
+    return pl.lit(None, dtype=pl.Float64).alias(name)
+'''
+
+def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
+    script = []
+    script.append("import polars as pl")
+    script.append("import formulas")
+    # Find all input/source columns
+    all_targets = set()
+    all_refs = set()
+    for c in parsed_commands:
+        if c['type'] == 'declaration':
+            all_targets.update(c['targets'])
+        elif 'target' in c:
+            all_targets.add(c['target'])
+        for ref in c.get('refs', []):
+            all_refs.add(ref)
+    input_vars = sorted(list(all_refs - all_targets))
+    script.append("df = pl.DataFrame({")
+    script.append("    'date': pl.date_range('2019-01-01', '2025-01-01', '1mo'),")
+    for col in input_vars:
+        if col == 'date': continue
+        script.append(f"    '{col}': pl.Series('{col}', range(1, 74)),")
+    script.append("})")
+    for alias, items in alias_dict.items():
+        script.append(f"{alias} = {items}")
+    script.append("# ---- DECLARE SERIES ----")
+    for lvl, targets in enumerate(levels):
+        cmds = [c for c in parsed_commands if (c.get('target') in targets) or (c['type'] == 'declaration' and set(c['targets']).intersection(targets))]
+        for c in cmds:
+            if c['type'] == 'declaration':
+                for t in c['targets']:
+                    script.append(f"{t} = formulas.DECLARE_SERIES(df, '{t}')")
+    script.append("# ---- COMPUTATIONS ----")
+    for lvl, targets in enumerate(levels):
+        cmds = [c for c in parsed_commands if (c.get('target') in targets)]
+        for c in cmds:
+            if c['type'] == 'fishvol_list':
+                vols = alias_dict.get(c['refs'][0], [c['refs'][0]])
+                prices = alias_dict.get(c['refs'][1], [c['refs'][1]])
+                script.append(f"{c['target']} = formulas.FISHVOL(df, {vols}, {prices}, year={c['year']})")
+            elif c['type'] == 'convert':
+                freq, method, period = c['params']
+                source = c['refs'][0]
+                script.append(f"{c['target']} = formulas.CONVERT(df, '{source}', '{freq}', '{method}', '{period}')")
+            elif c['type'] == 'mchain':
+                refs = c['refs']
+                script.append(f"{c['target']} = formulas.CHAIN(df, {refs}, base_year={c['base_year']})")
+            elif c['type'] == 'simple':
+                script.append(f"{c['target']} = formulas.SUM_HORIZONTAL(df, {c['refs']})")
+    script.append("print('Computation finished')")
+    return '\n'.join(script)
+
+if __name__ == '__main__':
+    fame_script = '''
+series gdp_q, cpi_q, vol_index_1
+vols_g1 = {v_a, v_b}
+prices_g1 = {p_a, p_b}
+all_vols = {v_a, v_b}
+list_of_vol_aliases = {vols_g1}
+freq q
+loop all_vols as VOL:
+    gdp_q = convert(VOL, q, ave, end)
+end loop
+loop list_of_vol_aliases as ALIAS:
+    gdp_real = fishvol_rebase(ALIAS, prices_g1, 2020)
+end loop
+vol_index_1 = v_a + v_b
+gdp_chained = $mchain("gdp_q - cpi_q", "2022")
+final_output = gdp_chained - vol_index_1
+'''
+    parsed, alias_dict = preprocess_commands(fame_script)
+    levels = get_computation_levels(parsed)
+    formulas_py = generate_formulas_py()
+    with open("formulas.py", "w") as f:
+        f.write(formulas_py)
+    convpy4rmfame_py = generate_convpy4rmfame_py(parsed, alias_dict, levels)
+    with open("convpy4rmfame.py", "w") as f:
+        f.write(convpy4rmfame_py)
+    print("formulas.py and convpy4rmfame.py have been generated.")
