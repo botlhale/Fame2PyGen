@@ -179,6 +179,34 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
             elif c['type'] == 'mchain':
                 refs = c['refs']
                 script.append(f"{c['target']} = formulas.CHAIN(df, {refs}, base_year={c['base_year']})")
+            elif c['type'] == 'pct':
+                source = c['refs'][0]
+                lag = c['params'][0]
+                script.append(f"# Using with_columns for pct function")
+                script.append(f"df = df.with_columns([ple.pct(pl.col('{source}'), lag={lag}).alias('{c['target']}')])")
+            elif c['type'] == 'interp':
+                source = c['refs'][0]
+                method = c['params'][0]
+                script.append(f"# Using with_columns for interp function")
+                script.append(f"df = df.with_columns([ple.interp(pl.col('{source}'), method='{method}').alias('{c['target']}')])")
+            elif c['type'] == 'overlay':
+                source1, source2 = c['refs']
+                script.append(f"# Using with_columns for overlay function")
+                script.append(f"df = df.with_columns([ple.overlay(pl.col('{source1}'), pl.col('{source2}')).alias('{c['target']}')])")
+            elif c['type'] == 'mave':
+                source = c['refs'][0]
+                window = c['params'][0]
+                script.append(f"# Using with_columns for mave function")
+                script.append(f"df = df.with_columns([ple.mave(pl.col('{source}'), window={window}).alias('{c['target']}')])")
+            elif c['type'] == 'mavec':
+                source = c['refs'][0]
+                window = c['params'][0]
+                script.append(f"# Using with_columns for mavec function")
+                script.append(f"df = df.with_columns([ple.mavec(pl.col('{source}'), window={window}).alias('{c['target']}')])")
+            elif c['type'] == 'copy':
+                source = c['refs'][0]
+                script.append(f"# Using with_columns for copy function")
+                script.append(f"df = df.with_columns([ple.copy(pl.col('{source}')).alias('{c['target']}')])")
             elif c['type'] == 'simple':
                 script.append(f"{c['target']} = formulas.SUM_HORIZONTAL(df, {c['refs']})")
     script.append("print('Computation finished')")
