@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logos/fame2pygen.png" alt="Fame2PyGen Logo" width="600"/>
+</div>
+
 # Fame2PyGen
 
 **Fame2PyGen** is a comprehensive toolset for automatically converting FAME-style formula scripts into executable, modular Python code using [Polars](https://pola.rs/) for DataFrame operations. It supports generic data transformation functions, auto-generated pipelines, and extensive FAME function coverage via the `polars_econ_mock.py` module.

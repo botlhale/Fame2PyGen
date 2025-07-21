@@ -1,3 +1,10 @@
+"""
+┌─────────────────────────────────────┐
+│            Fame2PyGen               │
+│         FAME → Python               │
+│      Economic Mock Functions        │
+└─────────────────────────────────────┘
+"""
 import polars as pl
 from typing import List, Tuple
 

@@ -1,3 +1,10 @@
+"""
+┌─────────────────────────────────────┐
+│            Fame2PyGen               │
+│         FAME → Python               │
+│        Formula Generator            │
+└─────────────────────────────────────┘
+"""
 import re
 
 def parse_series_declaration(line):
