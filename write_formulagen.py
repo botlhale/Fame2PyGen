@@ -289,8 +289,8 @@ def generate_formulas_py(parsed_commands=None, input_variables=None):
                 script.append('        pl.Series: Polars Series to compute the time series or variable values.')
                 script.append('    """')
                 
-                # For mchain, convert the expression and create a chain-like calculation
-                # Convert the inner expression and use it as a chained calculation
+                # For mchain, convert the expression and create a simple calculation
+                # Instead of using the raw $mchain, convert the inner expression
                 polars_expr = convert_expression_to_polars(expr, computed_refs)
                 
                 script.append('    # Chain calculation (simplified implementation)')
