@@ -249,21 +249,29 @@ if __name__ == '__main__':
     print("")
     
     fame_script = '''
-series gdp_q, cpi_q, vol_index_1
-vols_g1 = {v_a, v_b}
-prices_g1 = {p_a, p_b}
-all_vols = {v_a, v_b}
-list_of_vol_aliases = {vols_g1}
-freq q
-loop all_vols as VOL:
-    gdp_q = convert(VOL, q, ave, end)
-end loop
-loop list_of_vol_aliases as ALIAS:
-    gdp_real = fishvol_rebase(ALIAS, prices_g1, 2020)
-end loop
-vol_index_1 = v_a + v_b
-gdp_chained = $mchain("gdp_q - cpi_q", "2022")
-final_output = gdp_chained - vol_index_1
+a$=v123*12
+a=v143*12
+b=v143*2
+c$=v123*5
+d=v123*1
+e=v123*2
+f=v123*3
+g=v123*4
+h=v123*5
+pa$=v123*3
+pa=v143*4
+pb=v143*1
+pc$=v123*2
+pd=v123*3
+pe=v123*4
+pf=v123*5
+pg=v123*1
+ph=v123*2
+aa=a$/a
+bb=aa+a
+hxz = (b*12)/a
+abc$_d1=a$+b$+c$+a
+c1 = $mchain("a + b + c$ + d + e + f + g + h"2017")
 '''
     parsed, alias_dict = preprocess_commands(fame_script)
     levels = get_computation_levels(parsed)

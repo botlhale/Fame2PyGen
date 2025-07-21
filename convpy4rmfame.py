@@ -12,32 +12,33 @@ import polars as pl
 import formulas
 df = pl.DataFrame({
     'date': pl.date_range('2019-01-01', '2025-01-01', '1mo'),
-    'pcpi_q': pl.Series('pcpi_q', range(1, 74)),
-    'pgdp_q': pl.Series('pgdp_q', range(1, 74)),
-    'prices_g1': pl.Series('prices_g1', range(1, 74)),
-    'v_a': pl.Series('v_a', range(1, 74)),
-    'v_b': pl.Series('v_b', range(1, 74)),
+    '1': pl.Series('1', range(1, 74)),
+    '12': pl.Series('12', range(1, 74)),
+    '2': pl.Series('2', range(1, 74)),
+    '3': pl.Series('3', range(1, 74)),
+    '4': pl.Series('4', range(1, 74)),
+    '5': pl.Series('5', range(1, 74)),
+    'v123': pl.Series('v123', range(1, 74)),
+    'v143': pl.Series('v143', range(1, 74)),
 })
-vols_g1 = ['v_a', 'v_b']
-prices_g1 = ['p_a', 'p_b']
-all_vols = ['v_a', 'v_b']
-list_of_vol_aliases = ['v_a', 'v_b']
 # ---- DECLARE SERIES ----
-gdp_q = formulas.DECLARE_SERIES(df, 'gdp_q')
-cpi_q = formulas.DECLARE_SERIES(df, 'cpi_q')
-vol_index_1 = formulas.DECLARE_SERIES(df, 'vol_index_1')
-gdp_q = formulas.DECLARE_SERIES(df, 'gdp_q')
-cpi_q = formulas.DECLARE_SERIES(df, 'cpi_q')
-vol_index_1 = formulas.DECLARE_SERIES(df, 'vol_index_1')
 # ---- COMPUTATIONS ----
-gdp_q = formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end')
-gdp_q = formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end')
-vol_index_1 = formulas.SUM_HORIZONTAL(df, ['v_a', 'v_b'])
-gdp_q = formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end')
-gdp_q = formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end')
-gdp_real = formulas.FISHVOL(df, ['v_a'], ['p_a', 'p_b'], year=2020)
-gdp_real = formulas.FISHVOL(df, ['v_b'], ['p_a', 'p_b'], year=2020)
-vol_index_1 = formulas.SUM_HORIZONTAL(df, ['v_a', 'v_b'])
-gdp_chained = formulas.CHAIN(df, ['gdp_q', 'cpi_q', 'pgdp_q', 'pcpi_q'], base_year=2022)
-final_output = formulas.SUM_HORIZONTAL(df, ['gdp_chained', 'vol_index_1'])
+a = formulas.SUM_HORIZONTAL(df, ['v143', '12'])
+b = formulas.SUM_HORIZONTAL(df, ['v143', '2'])
+d = formulas.SUM_HORIZONTAL(df, ['v123', '1'])
+e = formulas.SUM_HORIZONTAL(df, ['v123', '2'])
+f = formulas.SUM_HORIZONTAL(df, ['v123', '3'])
+g = formulas.SUM_HORIZONTAL(df, ['v123', '4'])
+h = formulas.SUM_HORIZONTAL(df, ['v123', '5'])
+pa = formulas.SUM_HORIZONTAL(df, ['v143', '4'])
+pb = formulas.SUM_HORIZONTAL(df, ['v143', '1'])
+pd = formulas.SUM_HORIZONTAL(df, ['v123', '3'])
+pe = formulas.SUM_HORIZONTAL(df, ['v123', '4'])
+pf = formulas.SUM_HORIZONTAL(df, ['v123', '5'])
+pg = formulas.SUM_HORIZONTAL(df, ['v123', '1'])
+ph = formulas.SUM_HORIZONTAL(df, ['v123', '2'])
+hxz = formulas.SUM_HORIZONTAL(df, [])
+c1 = formulas.SUM_HORIZONTAL(df, [])
+aa = formulas.SUM_HORIZONTAL(df, ['a'])
+bb = formulas.SUM_HORIZONTAL(df, ['aa', 'a'])
 print('Computation finished')
