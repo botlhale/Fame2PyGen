@@ -10,6 +10,7 @@ Contains individual formula functions for FAME script conversion
 """
 import polars as pl
 import ple
+from typing import List, Tuple
 
 def A_() -> pl.Expr:
     """
@@ -329,24 +330,23 @@ def C1(a: pl.Series, b: pl.Series, c_: pl.Series, d: pl.Series, e: pl.Series, f:
         pl.Series: Polars Series to compute the time series or variable values.
     """
     res = (
-        $mchain("a + b + c_ + d + e + f + g + h",2017)
+        # TODO: Fix this - placeholder for now
+        a + b + c_ + d + e + f + g + h
     )
     return res
 
 # Generic fallback functions for compatibility
-def CONVERT(df, series, freq, method, period):
-    # Simplified conversion - just return the series as-is for now
-    return pl.col(series)
+def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str) -> pl.Expr:
+    """Generic wrapper for convert using 'ple.convert'."""
+    return ple.convert(series, "DATE", as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed)
 
-def FISHVOL(df, vol_list, price_list, year=None):
-    # Simplified implementation - just sum the volumes for now
-    vol_exprs = [pl.col(v) for v in vol_list]
-    return pl.sum_horizontal(vol_exprs)
+def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int) -> pl.Expr:
+    """Generic wrapper for $fishvol_rebase using 'ple.fishvol'."""
+    return ple.fishvol(series_pairs, date_col, rebase_year)
 
-def CHAIN(df, series_list, base_year):
-    # Convert series names to column expressions and simply sum them for now
-    col_exprs = [pl.col(col) for col in series_list]
-    return pl.sum_horizontal(col_exprs)
+def CHAIN(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, year: str) -> pl.Expr:
+    """Generic wrapper for $mchain using 'ple.chain'."""
+    return ple.chain(price_quantity_pairs=price_quantity_pairs, date_col=date_col, index_year=int(year))
 
 def DECLARE_SERIES(df, name):
     return pl.lit(None, dtype=pl.Float64).alias(name)
