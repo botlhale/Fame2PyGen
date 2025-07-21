@@ -9,6 +9,25 @@ import re
 import polars as pl
 import formulagen
 
+def variable_to_function_name(var):
+    """Convert a variable name to its corresponding function name."""
+    if var.endswith('$'):
+        # Convert a$ to A_, pa$ to PA_, etc.
+        return var[:-1].upper() + '_'
+    else:
+        # Convert a to A, pa to PA, etc.
+        return var.upper()
+
+def should_use_function_call(target, expr):
+    """Determine if we should use a function call for this expression.
+    Only use function calls for simple expressions that reference base variables (v123, v143)."""
+    # Check if the expression only contains v123, v143, numbers, and basic operators
+    import re
+    # Remove all v123, v143, numbers, operators and whitespace
+    cleaned = re.sub(r'(v123|v143|\d+|[+\-*/().\s])', '', expr)
+    # If nothing is left, this is a simple expression that can use function calls
+    return len(cleaned) == 0
+
 def preprocess_commands(fame_script):
     lines = fame_script.strip().split('\n')
     alias_dict = {}
@@ -203,6 +222,7 @@ def generate_formulas_py(parsed_commands=None, input_variables=None):
     script.append('"""')
     script.append('import polars as pl')
     script.append('import ple')
+    script.append('from typing import List, Tuple')
     script.append('')
     
     # Generate individual function definitions for each command
@@ -283,18 +303,17 @@ def generate_formulas_py(parsed_commands=None, input_variables=None):
                 script.append('    """')
                 script.append(f'    Computes the values for the {converted_target} time series or variable using Polars expressions.')
                 script.append('    Derived from FAME script(s):')
-                script.append(f'        set {target} = $mchain("{expr}", {base_year})')
+                script.append(f'        set {target} = $mchain("{expr}",{base_year})')
                 script.append('')
                 script.append('    Returns:')
                 script.append('        pl.Series: Polars Series to compute the time series or variable values.')
                 script.append('    """')
                 
                 # For mchain, convert the expression and create a simple calculation
-                # Instead of using the raw $mchain, convert the inner expression
                 polars_expr = convert_expression_to_polars(expr, computed_refs)
                 
-                script.append('    # Chain calculation (simplified implementation)')
                 script.append('    res = (')
+                script.append(f'        # TODO: Fix this - placeholder for now')
                 script.append(f'        {polars_expr}')
                 script.append('    )')
                 script.append('    return res')
@@ -302,19 +321,17 @@ def generate_formulas_py(parsed_commands=None, input_variables=None):
     
     # Add fallback generic functions for compatibility
     script.append('# Generic fallback functions for compatibility')
-    script.append('def CONVERT(df, series, freq, method, period):')
-    script.append('    # Simplified conversion - just return the series as-is for now')
-    script.append('    return pl.col(series)')
+    script.append('def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str) -> pl.Expr:')
+    script.append('    """Generic wrapper for convert using \'ple.convert\'.\"\"\"')
+    script.append('    return ple.convert(series, "DATE", as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed)')
     script.append('')
-    script.append('def FISHVOL(df, vol_list, price_list, year=None):')
-    script.append('    # Simplified implementation - just sum the volumes for now')
-    script.append('    vol_exprs = [pl.col(v) for v in vol_list]')
-    script.append('    return pl.sum_horizontal(vol_exprs)')
+    script.append('def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int) -> pl.Expr:')
+    script.append('    """Generic wrapper for $fishvol_rebase using \'ple.fishvol\'.\"\"\"')
+    script.append('    return ple.fishvol(series_pairs, date_col, rebase_year)')
     script.append('')
-    script.append('def CHAIN(df, series_list, base_year):')
-    script.append('    # Convert series names to column expressions and simply sum them for now')
-    script.append('    col_exprs = [pl.col(col) for col in series_list]')
-    script.append('    return pl.sum_horizontal(col_exprs)')
+    script.append('def CHAIN(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, year: str) -> pl.Expr:')
+    script.append('    """Generic wrapper for $mchain using \'ple.chain\'.\"\"\"')
+    script.append('    return ple.chain(price_quantity_pairs=price_quantity_pairs, date_col=date_col, index_year=int(year))')
     script.append('')
     script.append('def DECLARE_SERIES(df, name):')
     script.append('    return pl.lit(None, dtype=pl.Float64).alias(name)')
@@ -335,7 +352,7 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
     script.append('Contains the conversion pipeline from FAME script to Python')
     script.append('"""')
     script.append("import polars as pl")
-    script.append("import formulas")
+    script.append("from formulas import *")
     # Find all input/source columns
     all_targets = set()
     all_refs = set()
@@ -362,7 +379,7 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
             if c['type'] == 'declaration':
                 for t in c['targets']:
                     script.append(f"# Declare series: {t}")
-                    script.append(f"df = df.with_columns([formulas.DECLARE_SERIES(df, '{t}')])")
+                    script.append(f"df = df.with_columns([DECLARE_SERIES(df, '{t}')])")
     script.append("# ---- COMPUTATIONS ----")
     for lvl, targets in enumerate(levels):
         cmds = [c for c in parsed_commands if (c.get('target') in targets)]
@@ -371,16 +388,25 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
                 vols = alias_dict.get(c['refs'][0], [c['refs'][0]])
                 prices = alias_dict.get(c['refs'][1], [c['refs'][1]])
                 script.append(f"# fishvol function: {c['target']} = fishvol({vols}, {prices}, year={c['year']})")
-                script.append(f"df = df.with_columns([formulas.FISHVOL(df, {vols}, {prices}, year={c['year']}).alias('{c['target']}')])")
+                script.append(f"df = df.with_columns([FISHVOL(df, {vols}, {prices}, year={c['year']}).alias('{c['target']}')])")
             elif c['type'] == 'convert':
                 freq, method, period = c['params']
                 source = c['refs'][0]
                 script.append(f"# convert function: {c['target']} = convert({source}, {freq}, {method}, {period})")
-                script.append(f"df = df.with_columns([formulas.CONVERT(df, '{source}', '{freq}', '{method}', '{period}').alias('{c['target']}')])")
+                script.append(f"df = df.with_columns([CONVERT(df, '{source}', '{freq}', '{method}', '{period}').alias('{c['target']}')])")
             elif c['type'] == 'mchain':
                 refs = c['refs']
                 script.append(f"# mchain function: {c['target']} = chain({refs}, base_year={c['base_year']})")
-                script.append(f"df = df.with_columns([formulas.CHAIN(df, {refs}, base_year={c['base_year']}).alias('{c['target']}')])")
+                # Convert refs list to pairs format for CHAIN function
+                pair_exprs = []
+                for i in range(0, len(refs), 2):
+                    if i + 1 < len(refs):
+                        pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i+1]}'))")
+                    else:
+                        # If odd number, pair with itself or skip
+                        pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i]}'))")
+                pairs_str = '[' + ', '.join(pair_exprs) + ']'
+                script.append(f"df = df.with_columns([CHAIN({pairs_str}, pl.col(\"date\"), \"{c['base_year']}\").alias('{c['target']}')])")
             elif c['type'] == 'pct':
                 source = c['refs'][0]
                 lag = c['params'][0]
@@ -412,24 +438,33 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
             elif c['type'] == 'simple':
                 # Generate proper Polars expression for mathematical operations
                 expr = c['rhs']
-                # Replace variable names with pl.col() references
-                import re
-                # Find all variable names, including those with $ (must start with letter)
-                variables = re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr)
-                polars_expr = expr
+                target = c['target']
                 
-                # Sort variables by length (descending) to avoid partial replacements
-                variables = sorted(set(variables), key=len, reverse=True)
-                
-                for var in variables:
-                    # Escape the variable name for regex and use negative lookbehind/lookahead
-                    # to ensure we don't replace parts of other variable names
-                    escaped_var = re.escape(var)
-                    pattern = r'(?<![a-zA-Z0-9_$])' + escaped_var + r'(?![a-zA-Z0-9_$])'
-                    polars_expr = re.sub(pattern, f'pl.col("{var}")', polars_expr)
-                
-                script.append(f"# Mathematical expression: {c['target']} = {expr}")
-                script.append(f"df = df.with_columns([({polars_expr}).alias('{c['target']}')])")
+                # Check if this is a simple expression that can use function calls
+                if should_use_function_call(target, expr):
+                    # Use function call approach
+                    func_name = variable_to_function_name(target)
+                    script.append(f"# Mathematical expression: {target} = {expr}")
+                    script.append(f"df = df.with_columns([{func_name}().alias('{target}')])")
+                else:
+                    # Use traditional polars expression approach for complex expressions
+                    import re
+                    # Find all variable names, including those with $ (must start with letter)
+                    variables = re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr)
+                    polars_expr = expr
+                    
+                    # Sort variables by length (descending) to avoid partial replacements
+                    variables = sorted(set(variables), key=len, reverse=True)
+                    
+                    for var in variables:
+                        # Escape the variable name for regex and use negative lookbehind/lookahead
+                        # to ensure we don't replace parts of other variable names
+                        escaped_var = re.escape(var)
+                        pattern = r'(?<![a-zA-Z0-9_$])' + escaped_var + r'(?![a-zA-Z0-9_$])'
+                        polars_expr = re.sub(pattern, f'pl.col("{var}")', polars_expr)
+                    
+                    script.append(f"# Mathematical expression: {target} = {expr}")
+                    script.append(f"df = df.with_columns([({polars_expr}).alias('{target}')])")
     script.append("print('Computation finished')")
     return '\n'.join(script)
 
@@ -443,21 +478,33 @@ if __name__ == '__main__':
     print("")
     
     fame_script = '''
-series gdp_q, cpi_q, vol_index_1
-vols_g1 = {v_a, v_b}
-prices_g1 = {p_a, p_b}
-all_vols = {v_a, v_b}
-list_of_vol_aliases = {vols_g1}
-freq q
-loop all_vols as VOL:
-    gdp_q = convert(VOL, q, ave, end)
-end loop
-loop list_of_vol_aliases as ALIAS:
-    gdp_real = fishvol_rebase(ALIAS, prices_g1, 2020)
-end loop
-vol_index_1 = v_a + v_b
-gdp_chained = $mchain("gdp_q - cpi_q", "2022")
-final_output = gdp_chained - vol_index_1
+a$=v123*12
+a=v143*12
+b=v143*2
+b$=v123*6
+c$=v123*5
+d=v123*1
+e=v123*2
+f=v123*3
+g=v123*4
+h=v123*5
+pa$=v123*3
+pa=v143*4
+pb=v143*1
+pb$=v123*1
+pc$=v123*2
+pd=v123*3
+pe=v123*4
+pf=v123*5
+pg=v123*1
+ph=v123*2
+aa=a$/a
+bb=aa+a
+paa=pa$/pa
+pbb=pa+paa
+hxz = (b*12)/a
+abc$_d1=a$+b$+c$+a
+c1 = $mchain("a + b + c$ + d + e + f + g + h",2017)
 '''
     parsed, alias_dict = preprocess_commands(fame_script)
     levels = get_computation_levels(parsed)

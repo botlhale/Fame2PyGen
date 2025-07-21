@@ -10,6 +10,7 @@ Contains individual formula functions for FAME script conversion
 """
 import polars as pl
 import ple
+from typing import List, Tuple
 
 def A_() -> pl.Expr:
     """
@@ -52,6 +53,20 @@ def B() -> pl.Expr:
         pl.col("v143")*2
     )
     return res.alias("b")
+
+def B_() -> pl.Expr:
+    """
+    Computes the values for the b_ time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set b$ = v123*6
+
+    Returns:
+        pl.Expr: Polars expression to compute the time series or variable values.
+    """
+    res = (
+        pl.col("v123")*6
+    )
+    return res.alias("b_")
 
 def C_() -> pl.Expr:
     """
@@ -179,6 +194,20 @@ def PB() -> pl.Expr:
     )
     return res.alias("pb")
 
+def PB_() -> pl.Expr:
+    """
+    Computes the values for the pb_ time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set pb$ = v123*1
+
+    Returns:
+        pl.Expr: Polars expression to compute the time series or variable values.
+    """
+    res = (
+        pl.col("v123")*1
+    )
+    return res.alias("pb_")
+
 def PC_() -> pl.Expr:
     """
     Computes the values for the pc_ time series or variable using Polars expressions.
@@ -291,6 +320,34 @@ def BB(aa: pl.Series, a: pl.Series) -> pl.Series:
     )
     return res
 
+def PAA(pa_: pl.Series, pa: pl.Series) -> pl.Series:
+    """
+    Computes the values for the paa time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set paa = pa$/pa
+
+    Returns:
+        pl.Series: Polars Series to compute the time series or variable values.
+    """
+    res = (
+        pa_/pa
+    )
+    return res
+
+def PBB(pa: pl.Series, paa: pl.Series) -> pl.Series:
+    """
+    Computes the values for the pbb time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set pbb = pa+paa
+
+    Returns:
+        pl.Series: Polars Series to compute the time series or variable values.
+    """
+    res = (
+        pa+paa
+    )
+    return res
+
 def HXZ(b: pl.Series, a: pl.Series) -> pl.Series:
     """
     Computes the values for the hxz time series or variable using Polars expressions.
@@ -305,7 +362,7 @@ def HXZ(b: pl.Series, a: pl.Series) -> pl.Series:
     )
     return res
 
-def ABC__D1(a_: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Series:
+def ABC__D1(a_: pl.Series, b_: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Series:
     """
     Computes the values for the abc__d1 time series or variable using Polars expressions.
     Derived from FAME script(s):
@@ -315,7 +372,7 @@ def ABC__D1(a_: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Series:
         pl.Series: Polars Series to compute the time series or variable values.
     """
     res = (
-        a_+pl.col("b_")+c_+a
+        a_+b_+c_+a
     )
     return res
 
@@ -329,24 +386,23 @@ def C1(a: pl.Series, b: pl.Series, c_: pl.Series, d: pl.Series, e: pl.Series, f:
         pl.Series: Polars Series to compute the time series or variable values.
     """
     res = (
-        $mchain("a + b + c_ + d + e + f + g + h",2017)
+        # TODO: Fix this - placeholder for now
+        a + b + c_ + d + e + f + g + h
     )
     return res
 
 # Generic fallback functions for compatibility
-def CONVERT(df, series, freq, method, period):
-    # Simplified conversion - just return the series as-is for now
-    return pl.col(series)
+def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str) -> pl.Expr:
+    """Generic wrapper for convert using 'ple.convert'."""
+    return ple.convert(series, "DATE", as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed)
 
-def FISHVOL(df, vol_list, price_list, year=None):
-    # Simplified implementation - just sum the volumes for now
-    vol_exprs = [pl.col(v) for v in vol_list]
-    return pl.sum_horizontal(vol_exprs)
+def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int) -> pl.Expr:
+    """Generic wrapper for $fishvol_rebase using 'ple.fishvol'."""
+    return ple.fishvol(series_pairs, date_col, rebase_year)
 
-def CHAIN(df, series_list, base_year):
-    # Convert series names to column expressions and simply sum them for now
-    col_exprs = [pl.col(col) for col in series_list]
-    return pl.sum_horizontal(col_exprs)
+def CHAIN(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, year: str) -> pl.Expr:
+    """Generic wrapper for $mchain using 'ple.chain'."""
+    return ple.chain(price_quantity_pairs=price_quantity_pairs, date_col=date_col, index_year=int(year))
 
 def DECLARE_SERIES(df, name):
     return pl.lit(None, dtype=pl.Float64).alias(name)
