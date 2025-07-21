@@ -8,7 +8,7 @@
 import re
 
 def parse_series_declaration(line):
-    m = re.match(r'series\s+([a-zA-Z0-9_,\s]+)', line)
+    m = re.match(r'series\s+([a-zA-Z0-9_$,\s]+)', line)
     if m:
         targets = [t.strip() for t in m.group(1).split(',')]
         return {'type': 'declaration', 'targets': targets}
@@ -21,13 +21,13 @@ def parse_freq_command(line):
     return None
 
 def parse_fishvol_list_command(line):
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*fishvol_rebase\(([a-zA-Z0-9_]+),\s*([a-zA-Z0-9_]+),\s*([0-9]+)\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*fishvol_rebase\(([a-zA-Z0-9_$]+),\s*([a-zA-Z0-9_$]+),\s*([0-9]+)\)', line)
     if m:
         return {'type': 'fishvol_list', 'target': m.group(1), 'refs': [m.group(2), m.group(3)], 'year': m.group(4)}
     return None
 
 def parse_convert_command(line):
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*convert\(([a-zA-Z0-9_]+),\s*([qa]),\s*([a-zA-Z]+),\s*([a-zA-Z]+)\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*convert\(([a-zA-Z0-9_$]+),\s*([qa]),\s*([a-zA-Z]+),\s*([a-zA-Z]+)\)', line)
     if m:
         return {
             'type': 'convert',
@@ -38,24 +38,43 @@ def parse_convert_command(line):
     return None
 
 def parse_mchain_command(line):
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*\$mchain\("([^"]+)",\s*"([0-9]+)"\)', line)
+    # Handle properly formatted mchain: $mchain("expr", "year")
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*\$mchain\("([^"]+)",\s*"([0-9]+)"\)', line)
     if m:
         expr = m.group(2)
-        refs = re.findall(r'[a-zA-Z0-9_]+', expr)
-        price_refs = ['p'+r if not r.startswith('p') else r for r in refs]
-        all_refs = refs + price_refs
+        # Extract variable references (exclude pure numbers and operators)
+        refs = []
+        for match in re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr):
+            refs.append(match)
         return {
             'type': 'mchain',
             'target': m.group(1),
             'expr': expr,
-            'refs': all_refs,
+            'refs': refs,
             'base_year': m.group(3)
         }
+    
+    # Handle malformed mchain: $mchain("expr"year") - missing comma
+    m2 = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*\$mchain\("([^"]+)"([0-9]+)"\)', line)
+    if m2:
+        expr = m2.group(2)
+        # Extract variable references (exclude pure numbers and operators)
+        refs = []
+        for match in re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr):
+            refs.append(match)
+        return {
+            'type': 'mchain',
+            'target': m2.group(1),
+            'expr': expr,
+            'refs': refs,
+            'base_year': m2.group(3)
+        }
+    
     return None
 
 def parse_pct_command(line):
     """Parse percentage change commands like: set growth = pct(series, 4)"""
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*pct\(([a-zA-Z0-9_]+)(?:,\s*([0-9]+))?\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*pct\(([a-zA-Z0-9_$]+)(?:,\s*([0-9]+))?\)', line)
     if m:
         return {
             'type': 'pct',
@@ -67,7 +86,7 @@ def parse_pct_command(line):
 
 def parse_interp_command(line):
     """Parse interpolation commands like: set filled = interp(series, linear)"""
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*interp\(([a-zA-Z0-9_]+)(?:,\s*([a-zA-Z]+))?\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*interp\(([a-zA-Z0-9_$]+)(?:,\s*([a-zA-Z]+))?\)', line)
     if m:
         return {
             'type': 'interp',
@@ -79,7 +98,7 @@ def parse_interp_command(line):
 
 def parse_overlay_command(line):
     """Parse overlay commands like: set combined = overlay(series1, series2)"""
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*overlay\(([a-zA-Z0-9_]+),\s*([a-zA-Z0-9_]+)\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*overlay\(([a-zA-Z0-9_$]+),\s*([a-zA-Z0-9_$]+)\)', line)
     if m:
         return {
             'type': 'overlay',
@@ -91,7 +110,7 @@ def parse_overlay_command(line):
 
 def parse_mave_command(line):
     """Parse moving average commands like: set smooth = mave(series, 12)"""
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*mave\(([a-zA-Z0-9_]+),\s*([0-9]+)\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*mave\(([a-zA-Z0-9_$]+),\s*([0-9]+)\)', line)
     if m:
         return {
             'type': 'mave',
@@ -103,7 +122,7 @@ def parse_mave_command(line):
 
 def parse_mavec_command(line):
     """Parse centered moving average commands like: set centered = mavec(series, 12)"""
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*mavec\(([a-zA-Z0-9_]+),\s*([0-9]+)\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*mavec\(([a-zA-Z0-9_$]+),\s*([0-9]+)\)', line)
     if m:
         return {
             'type': 'mavec',
@@ -115,7 +134,7 @@ def parse_mavec_command(line):
 
 def parse_copy_command(line):
     """Parse copy commands like: set backup = copy(original)"""
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*copy\(([a-zA-Z0-9_]+)\)', line)
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*copy\(([a-zA-Z0-9_$]+)\)', line)
     if m:
         return {
             'type': 'copy',
@@ -126,13 +145,22 @@ def parse_copy_command(line):
     return None
 
 def parse_simple_command(line):
-    if re.match(r'[a-zA-Z0-9_]+\s*=\s*\{.+\}', line):
+    # Skip alias definitions
+    if re.match(r'[a-zA-Z0-9_$]+\s*=\s*\{.+\}', line):
         return None
-    m = re.match(r'([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_+\-\*/\s]+)', line)
+    
+    # Support variable names with $ and complex expressions with parentheses
+    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*(.+)', line)
     if m:
-        rhs = m.group(2)
-        refs = re.findall(r'[a-zA-Z0-9_]+', rhs)
-        return {'type': 'simple', 'target': m.group(1), 'rhs': rhs, 'refs': refs}
+        target = m.group(1)
+        rhs = m.group(2).strip()
+        
+        # Extract variable references (exclude pure numbers)
+        refs = []
+        for match in re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', rhs):
+            refs.append(match)
+        
+        return {'type': 'simple', 'target': target, 'rhs': rhs, 'refs': refs}
     return None
 
 def parse_command(line):

@@ -11,9 +11,7 @@ Contains the conversion pipeline from FAME script to Python
 import polars as pl
 import formulas
 df = pl.DataFrame({
-    'date': pl.date_range('2019-01-01', '2025-01-01', '1mo'),
-    'pcpi_q': pl.Series('pcpi_q', range(1, 74)),
-    'pgdp_q': pl.Series('pgdp_q', range(1, 74)),
+    'date': pl.date_range(pl.date(2019, 1, 1), pl.date(2025, 1, 1), '1mo', eager=True),
     'prices_g1': pl.Series('prices_g1', range(1, 74)),
     'v_a': pl.Series('v_a', range(1, 74)),
     'v_b': pl.Series('v_b', range(1, 74)),
@@ -23,21 +21,37 @@ prices_g1 = ['p_a', 'p_b']
 all_vols = ['v_a', 'v_b']
 list_of_vol_aliases = ['v_a', 'v_b']
 # ---- DECLARE SERIES ----
-gdp_q = formulas.DECLARE_SERIES(df, 'gdp_q')
-cpi_q = formulas.DECLARE_SERIES(df, 'cpi_q')
-vol_index_1 = formulas.DECLARE_SERIES(df, 'vol_index_1')
-gdp_q = formulas.DECLARE_SERIES(df, 'gdp_q')
-cpi_q = formulas.DECLARE_SERIES(df, 'cpi_q')
-vol_index_1 = formulas.DECLARE_SERIES(df, 'vol_index_1')
+# Declare series: gdp_q
+df = df.with_columns([formulas.DECLARE_SERIES(df, 'gdp_q')])
+# Declare series: cpi_q
+df = df.with_columns([formulas.DECLARE_SERIES(df, 'cpi_q')])
+# Declare series: vol_index_1
+df = df.with_columns([formulas.DECLARE_SERIES(df, 'vol_index_1')])
+# Declare series: gdp_q
+df = df.with_columns([formulas.DECLARE_SERIES(df, 'gdp_q')])
+# Declare series: cpi_q
+df = df.with_columns([formulas.DECLARE_SERIES(df, 'cpi_q')])
+# Declare series: vol_index_1
+df = df.with_columns([formulas.DECLARE_SERIES(df, 'vol_index_1')])
 # ---- COMPUTATIONS ----
-gdp_q = formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end')
-gdp_q = formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end')
-vol_index_1 = formulas.SUM_HORIZONTAL(df, ['v_a', 'v_b'])
-gdp_q = formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end')
-gdp_q = formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end')
-gdp_real = formulas.FISHVOL(df, ['v_a'], ['p_a', 'p_b'], year=2020)
-gdp_real = formulas.FISHVOL(df, ['v_b'], ['p_a', 'p_b'], year=2020)
-vol_index_1 = formulas.SUM_HORIZONTAL(df, ['v_a', 'v_b'])
-gdp_chained = formulas.CHAIN(df, ['gdp_q', 'cpi_q', 'pgdp_q', 'pcpi_q'], base_year=2022)
-final_output = formulas.SUM_HORIZONTAL(df, ['gdp_chained', 'vol_index_1'])
+# convert function: gdp_q = convert(v_a, q, ave, end)
+df = df.with_columns([formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end').alias('gdp_q')])
+# convert function: gdp_q = convert(v_b, q, ave, end)
+df = df.with_columns([formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end').alias('gdp_q')])
+# Mathematical expression: vol_index_1 = v_a + v_b
+df = df.with_columns([(pl.col("v_a") + pl.col("v_b")).alias('vol_index_1')])
+# convert function: gdp_q = convert(v_a, q, ave, end)
+df = df.with_columns([formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end').alias('gdp_q')])
+# convert function: gdp_q = convert(v_b, q, ave, end)
+df = df.with_columns([formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end').alias('gdp_q')])
+# fishvol function: gdp_real = fishvol(['v_a'], ['p_a', 'p_b'], year=2020)
+df = df.with_columns([formulas.FISHVOL(df, ['v_a'], ['p_a', 'p_b'], year=2020).alias('gdp_real')])
+# fishvol function: gdp_real = fishvol(['v_b'], ['p_a', 'p_b'], year=2020)
+df = df.with_columns([formulas.FISHVOL(df, ['v_b'], ['p_a', 'p_b'], year=2020).alias('gdp_real')])
+# Mathematical expression: vol_index_1 = v_a + v_b
+df = df.with_columns([(pl.col("v_a") + pl.col("v_b")).alias('vol_index_1')])
+# mchain function: gdp_chained = chain(['gdp_q', 'cpi_q'], base_year=2022)
+df = df.with_columns([formulas.CHAIN(df, ['gdp_q', 'cpi_q'], base_year=2022).alias('gdp_chained')])
+# Mathematical expression: final_output = gdp_chained - vol_index_1
+df = df.with_columns([(pl.col("gdp_chained") - pl.col("vol_index_1")).alias('final_output')])
 print('Computation finished')
