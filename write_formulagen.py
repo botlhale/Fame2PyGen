@@ -9,6 +9,25 @@ import re
 import polars as pl
 import formulagen
 
+def variable_to_function_name(var):
+    """Convert a variable name to its corresponding function name."""
+    if var.endswith('$'):
+        # Convert a$ to A_, pa$ to PA_, etc.
+        return var[:-1].upper() + '_'
+    else:
+        # Convert a to A, pa to PA, etc.
+        return var.upper()
+
+def should_use_function_call(target, expr):
+    """Determine if we should use a function call for this expression.
+    Only use function calls for simple expressions that reference base variables (v123, v143)."""
+    # Check if the expression only contains v123, v143, numbers, and basic operators
+    import re
+    # Remove all v123, v143, numbers, operators and whitespace
+    cleaned = re.sub(r'(v123|v143|\d+|[+\-*/().\s])', '', expr)
+    # If nothing is left, this is a simple expression that can use function calls
+    return len(cleaned) == 0
+
 def preprocess_commands(fame_script):
     lines = fame_script.strip().split('\n')
     alias_dict = {}
@@ -333,7 +352,7 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
     script.append('Contains the conversion pipeline from FAME script to Python')
     script.append('"""')
     script.append("import polars as pl")
-    script.append("import formulas")
+    script.append("from formulas import *")
     # Find all input/source columns
     all_targets = set()
     all_refs = set()
@@ -360,7 +379,7 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
             if c['type'] == 'declaration':
                 for t in c['targets']:
                     script.append(f"# Declare series: {t}")
-                    script.append(f"df = df.with_columns([formulas.DECLARE_SERIES(df, '{t}')])")
+                    script.append(f"df = df.with_columns([DECLARE_SERIES(df, '{t}')])")
     script.append("# ---- COMPUTATIONS ----")
     for lvl, targets in enumerate(levels):
         cmds = [c for c in parsed_commands if (c.get('target') in targets)]
@@ -369,16 +388,25 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
                 vols = alias_dict.get(c['refs'][0], [c['refs'][0]])
                 prices = alias_dict.get(c['refs'][1], [c['refs'][1]])
                 script.append(f"# fishvol function: {c['target']} = fishvol({vols}, {prices}, year={c['year']})")
-                script.append(f"df = df.with_columns([formulas.FISHVOL(df, {vols}, {prices}, year={c['year']}).alias('{c['target']}')])")
+                script.append(f"df = df.with_columns([FISHVOL(df, {vols}, {prices}, year={c['year']}).alias('{c['target']}')])")
             elif c['type'] == 'convert':
                 freq, method, period = c['params']
                 source = c['refs'][0]
                 script.append(f"# convert function: {c['target']} = convert({source}, {freq}, {method}, {period})")
-                script.append(f"df = df.with_columns([formulas.CONVERT(df, '{source}', '{freq}', '{method}', '{period}').alias('{c['target']}')])")
+                script.append(f"df = df.with_columns([CONVERT(df, '{source}', '{freq}', '{method}', '{period}').alias('{c['target']}')])")
             elif c['type'] == 'mchain':
                 refs = c['refs']
                 script.append(f"# mchain function: {c['target']} = chain({refs}, base_year={c['base_year']})")
-                script.append(f"df = df.with_columns([formulas.CHAIN(df, {refs}, base_year={c['base_year']}).alias('{c['target']}')])")
+                # Convert refs list to pairs format for CHAIN function
+                pair_exprs = []
+                for i in range(0, len(refs), 2):
+                    if i + 1 < len(refs):
+                        pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i+1]}'))")
+                    else:
+                        # If odd number, pair with itself or skip
+                        pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i]}'))")
+                pairs_str = '[' + ', '.join(pair_exprs) + ']'
+                script.append(f"df = df.with_columns([CHAIN({pairs_str}, pl.col(\"date\"), \"{c['base_year']}\").alias('{c['target']}')])")
             elif c['type'] == 'pct':
                 source = c['refs'][0]
                 lag = c['params'][0]
@@ -410,24 +438,33 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
             elif c['type'] == 'simple':
                 # Generate proper Polars expression for mathematical operations
                 expr = c['rhs']
-                # Replace variable names with pl.col() references
-                import re
-                # Find all variable names, including those with $ (must start with letter)
-                variables = re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr)
-                polars_expr = expr
+                target = c['target']
                 
-                # Sort variables by length (descending) to avoid partial replacements
-                variables = sorted(set(variables), key=len, reverse=True)
-                
-                for var in variables:
-                    # Escape the variable name for regex and use negative lookbehind/lookahead
-                    # to ensure we don't replace parts of other variable names
-                    escaped_var = re.escape(var)
-                    pattern = r'(?<![a-zA-Z0-9_$])' + escaped_var + r'(?![a-zA-Z0-9_$])'
-                    polars_expr = re.sub(pattern, f'pl.col("{var}")', polars_expr)
-                
-                script.append(f"# Mathematical expression: {c['target']} = {expr}")
-                script.append(f"df = df.with_columns([({polars_expr}).alias('{c['target']}')])")
+                # Check if this is a simple expression that can use function calls
+                if should_use_function_call(target, expr):
+                    # Use function call approach
+                    func_name = variable_to_function_name(target)
+                    script.append(f"# Mathematical expression: {target} = {expr}")
+                    script.append(f"df = df.with_columns([{func_name}().alias('{target}')])")
+                else:
+                    # Use traditional polars expression approach for complex expressions
+                    import re
+                    # Find all variable names, including those with $ (must start with letter)
+                    variables = re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr)
+                    polars_expr = expr
+                    
+                    # Sort variables by length (descending) to avoid partial replacements
+                    variables = sorted(set(variables), key=len, reverse=True)
+                    
+                    for var in variables:
+                        # Escape the variable name for regex and use negative lookbehind/lookahead
+                        # to ensure we don't replace parts of other variable names
+                        escaped_var = re.escape(var)
+                        pattern = r'(?<![a-zA-Z0-9_$])' + escaped_var + r'(?![a-zA-Z0-9_$])'
+                        polars_expr = re.sub(pattern, f'pl.col("{var}")', polars_expr)
+                    
+                    script.append(f"# Mathematical expression: {target} = {expr}")
+                    script.append(f"df = df.with_columns([({polars_expr}).alias('{target}')])")
     script.append("print('Computation finished')")
     return '\n'.join(script)
 
