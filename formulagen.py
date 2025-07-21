@@ -21,12 +21,40 @@ def parse_freq_command(line):
     return None
 
 def parse_fishvol_list_command(line):
+    # Enhanced fishvol with dependencies: fishvol_rebase(volumes, prices, year, deps=["var1", "var2"])
+    enhanced_m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*fishvol_rebase\(([a-zA-Z0-9_$]+),\s*([a-zA-Z0-9_$]+),\s*([0-9]+),\s*deps=\[([^\]]+)\]\)', line)
+    if enhanced_m:
+        deps_str = enhanced_m.group(5)
+        dependencies = [d.strip().strip('"\'') for d in deps_str.split(',')]
+        return {
+            'type': 'fishvol_enhanced', 
+            'target': enhanced_m.group(1), 
+            'refs': [enhanced_m.group(2), enhanced_m.group(3)], 
+            'year': enhanced_m.group(4),
+            'dependencies': dependencies
+        }
+    
+    # Traditional fishvol: fishvol_rebase(volumes, prices, year)
     m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*fishvol_rebase\(([a-zA-Z0-9_$]+),\s*([a-zA-Z0-9_$]+),\s*([0-9]+)\)', line)
     if m:
         return {'type': 'fishvol_list', 'target': m.group(1), 'refs': [m.group(2), m.group(3)], 'year': m.group(4)}
     return None
 
 def parse_convert_command(line):
+    # Enhanced convert with dependencies: convert(series, freq, method, period, deps=["var1", "var2"])
+    enhanced_m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*convert\(([a-zA-Z0-9_$]+),\s*([qa]),\s*([a-zA-Z]+),\s*([a-zA-Z]+),\s*deps=\[([^\]]+)\]\)', line)
+    if enhanced_m:
+        deps_str = enhanced_m.group(6)
+        dependencies = [d.strip().strip('"\'') for d in deps_str.split(',')]
+        return {
+            'type': 'convert_enhanced',
+            'target': enhanced_m.group(1),
+            'refs': [enhanced_m.group(2)],
+            'params': [enhanced_m.group(3), enhanced_m.group(4), enhanced_m.group(5)],
+            'dependencies': dependencies
+        }
+    
+    # Traditional convert: convert(series, freq, method, period)
     m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*convert\(([a-zA-Z0-9_$]+),\s*([qa]),\s*([a-zA-Z]+),\s*([a-zA-Z]+)\)', line)
     if m:
         return {
@@ -38,6 +66,27 @@ def parse_convert_command(line):
     return None
 
 def parse_mchain_command(line):
+    # Handle $chainsum with variable list: $chainsum("expr", year, ["var1", "var2"])
+    chainsum_m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*\$chainsum\("([^"]+)",\s*([0-9]+),\s*\[([^\]]+)\]\)', line)
+    if chainsum_m:
+        expr = chainsum_m.group(2)
+        # Extract variable references from expression
+        refs = []
+        for match in re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr):
+            refs.append(match)
+        # Parse variable list
+        var_list_str = chainsum_m.group(4)
+        var_list = [v.strip().strip('"\'') for v in var_list_str.split(',')]
+        return {
+            'type': 'mchain_enhanced',  # Using enhanced type to distinguish functionality
+            'operation': 'chainsum',
+            'target': chainsum_m.group(1),
+            'expr': expr,
+            'refs': refs,
+            'base_year': chainsum_m.group(3),
+            'var_list': var_list
+        }
+    
     # Handle properly formatted mchain: $mchain("expr", "year")
     m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*\$mchain\("([^"]+)",\s*"([0-9]+)"\)', line)
     if m:
@@ -48,6 +97,7 @@ def parse_mchain_command(line):
             refs.append(match)
         return {
             'type': 'mchain',
+            'operation': 'chain',
             'target': m.group(1),
             'expr': expr,
             'refs': refs,
@@ -64,6 +114,7 @@ def parse_mchain_command(line):
             refs.append(match)
         return {
             'type': 'mchain',
+            'operation': 'chain',
             'target': m3.group(1),
             'expr': expr,
             'refs': refs,
@@ -80,36 +131,11 @@ def parse_mchain_command(line):
             refs.append(match)
         return {
             'type': 'mchain',
+            'operation': 'chain',
             'target': m2.group(1),
             'expr': expr,
             'refs': refs,
             'base_year': m2.group(3)
-        }
-    
-    return None
-
-def parse_chain_sum_command(line):
-    """Parse chain sum commands for complex chaining operations with sums."""
-    # Handle chain sum: $chainsum("expr", year, [list])
-    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*\$chainsum\("([^"]+)",\s*([0-9]+),\s*\[([^\]]+)\]\)', line)
-    if m:
-        expr = m.group(2)
-        base_year = m.group(3)
-        var_list = [v.strip().strip('"\'') for v in m.group(4).split(',')]
-        
-        # Extract all variable references from expression and list
-        refs = set()
-        for match in re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr):
-            refs.add(match)
-        refs.update(var_list)
-        
-        return {
-            'type': 'chainsum',
-            'target': m.group(1),
-            'expr': expr,
-            'refs': list(refs),
-            'var_list': var_list,
-            'base_year': base_year
         }
     
     return None
@@ -205,49 +231,12 @@ def parse_simple_command(line):
         return {'type': 'simple', 'target': target, 'rhs': rhs, 'refs': refs}
     return None
 
-def parse_fishvol_enhanced_command(line):
-    """Parse enhanced fishvol commands with better dependency handling."""
-    # Enhanced fishvol with explicit dependencies: fishvol_rebase(vols, prices, year, deps=[...])
-    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*fishvol_rebase\(([a-zA-Z0-9_$]+),\s*([a-zA-Z0-9_$]+),\s*([0-9]+)(?:,\s*deps=\[([^\]]*)\])?\)', line)
-    if m:
-        deps = []
-        if m.group(5):
-            deps = [d.strip().strip('"\'') for d in m.group(5).split(',')]
-        return {
-            'type': 'fishvol_enhanced', 
-            'target': m.group(1), 
-            'refs': [m.group(2), m.group(3)], 
-            'year': m.group(4),
-            'dependencies': deps
-        }
-    return None
-
-def parse_convert_enhanced_command(line):
-    """Parse enhanced convert commands with better dependency handling."""
-    # Enhanced convert with dependencies: convert(series, freq, method, period, deps=[...])
-    m = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*convert\(([a-zA-Z0-9_$]+),\s*([qa]),\s*([a-zA-Z]+),\s*([a-zA-Z]+)(?:,\s*deps=\[([^\]]*)\])?\)', line)
-    if m:
-        deps = []
-        if m.group(6):
-            deps = [d.strip().strip('"\'') for d in m.group(6).split(',')]
-        return {
-            'type': 'convert_enhanced',
-            'target': m.group(1),
-            'refs': [m.group(2)],
-            'params': [m.group(3), m.group(4), m.group(5)],
-            'dependencies': deps
-        }
-    return None
-
 def parse_command(line):
     for parser in [
         parse_series_declaration,
         parse_freq_command,
-        parse_fishvol_enhanced_command,
         parse_fishvol_list_command,
-        parse_convert_enhanced_command,
         parse_convert_command,
-        parse_chain_sum_command,
         parse_mchain_command,
         parse_pct_command,
         parse_interp_command,

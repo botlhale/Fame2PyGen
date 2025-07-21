@@ -4,7 +4,7 @@
 
 # Fame2PyGen
 
-**Fame2PyGen** is a comprehensive toolset for automatically converting FAME-style formula scripts into executable, modular Python code using [Polars](https://pola.rs/) for DataFrame operations. It supports generic data transformation functions, auto-generated pipelines, extensive FAME function coverage, and **enhanced chain sum operations** with dependency-aware computation.
+**Fame2PyGen** is a comprehensive toolset for automatically converting FAME-style formula scripts into executable, modular Python code using [Polars](https://pola.rs/) for DataFrame operations. It supports generic data transformation functions, auto-generated pipelines, extensive FAME function coverage, and **enhanced chain sum operations with dependency-aware computation through enhanced existing functions**.
 
 ## 🎨 Logo Options
 
@@ -16,21 +16,21 @@ We've created three logo concepts for the project:
 
 See the `/logos` directory for complete designs and usage guidelines.
 
-## ✨ Enhanced Features (NEW)
+## ✨ Enhanced Existing Functions (NEW)
 
-### Chain Sum Operations 
-- **$chainsum()**: Advanced chaining operations with variable lists and dependency support
-- **Enhanced $mchain()**: Improved chain-linked operations with better expression handling  
+### Enhanced CHAIN Function
+- **$mchain()**: Traditional chaining operations (existing functionality)
+- **$chainsum()**: New chainsum operations using enhanced CHAIN function with variable lists and dependency support
 - **Dependency Management**: Automatic ordering of computations based on variable dependencies
 
-### Enhanced FISHVOL Support
-- **fishvol_rebase()** with explicit dependency lists
-- **FISHVOL_ENHANCED()**: Support for variable name lists with dependency tracking
+### Enhanced FISHVOL Function
+- **fishvol_rebase()**: Traditional Fisher volume operations (existing functionality)
+- **fishvol_rebase() with deps**: Enhanced with explicit dependency lists using enhanced FISHVOL function
 - **Multi-series aggregation**: Proper handling of complex Fisher volume calculations
 
-### Enhanced CONVERT Support  
-- **convert()** with dependency parameters for proper computation ordering
-- **convert_enhanced()**: Improved frequency conversion with dependency awareness
+### Enhanced CONVERT Function  
+- **convert()**: Traditional frequency conversion (existing functionality)
+- **convert() with deps**: Enhanced with dependency parameters for proper computation ordering using enhanced CONVERT function
 - **Temporal consistency**: Better handling of frequency conversion dependencies
 
 ## Project Structure
