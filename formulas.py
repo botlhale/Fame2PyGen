@@ -54,6 +54,20 @@ def B() -> pl.Expr:
     )
     return res.alias("b")
 
+def B_() -> pl.Expr:
+    """
+    Computes the values for the b_ time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set b$ = v123*6
+
+    Returns:
+        pl.Expr: Polars expression to compute the time series or variable values.
+    """
+    res = (
+        pl.col("v123")*6
+    )
+    return res.alias("b_")
+
 def C_() -> pl.Expr:
     """
     Computes the values for the c_ time series or variable using Polars expressions.
@@ -180,6 +194,20 @@ def PB() -> pl.Expr:
     )
     return res.alias("pb")
 
+def PB_() -> pl.Expr:
+    """
+    Computes the values for the pb_ time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set pb$ = v123*1
+
+    Returns:
+        pl.Expr: Polars expression to compute the time series or variable values.
+    """
+    res = (
+        pl.col("v123")*1
+    )
+    return res.alias("pb_")
+
 def PC_() -> pl.Expr:
     """
     Computes the values for the pc_ time series or variable using Polars expressions.
@@ -289,6 +317,34 @@ def BB(aa: pl.Series, a: pl.Series) -> pl.Series:
     """
     res = (
         aa+a
+    )
+    return res
+
+def PAA(pa_: pl.Series, pa: pl.Series) -> pl.Series:
+    """
+    Computes the values for the paa time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set paa = pa$/pa
+
+    Returns:
+        pl.Series: Polars Series to compute the time series or variable values.
+    """
+    res = (
+        pa_/pa
+    )
+    return res
+
+def PBB(pa: pl.Series, paa: pl.Series) -> pl.Series:
+    """
+    Computes the values for the pbb time series or variable using Polars expressions.
+    Derived from FAME script(s):
+        set pbb = pa+paa
+
+    Returns:
+        pl.Series: Polars Series to compute the time series or variable values.
+    """
+    res = (
+        pa+paa
     )
     return res
 
