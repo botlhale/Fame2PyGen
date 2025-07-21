@@ -1,5 +1,9 @@
 # FAME Function Conversion Examples
 
+<div align="center">
+  <img src="logos/fame2pygen.png" alt="Fame2PyGen Logo" width="400"/>
+</div>
+
 This document shows examples of how various FAME functions are converted to Python using the Fame2PyGen system.
 
 ## Core FAME Functions Supported
