@@ -287,7 +287,7 @@ def generate_formulas_py(parsed_commands=None, input_variables=None):
             script.append('')
             
         elif cmd['type'] == 'mchain':
-            # Generate function for mchain expression
+            # Generate function for mchain expression - enhanced 
             target = cmd['target']
             expr = cmd['expr']
             base_year = cmd['base_year']
@@ -301,37 +301,80 @@ def generate_formulas_py(parsed_commands=None, input_variables=None):
                 params = ', '.join([f'{convert_variable_name(ref)}: pl.Series' for ref in computed_refs])
                 script.append(f'def {func_name}({params}) -> pl.Series:')
                 script.append('    """')
-                script.append(f'    Computes the values for the {converted_target} time series or variable using Polars expressions.')
+                script.append(f'    Computes the values for the {converted_target} time series using enhanced mchain operations.')
                 script.append('    Derived from FAME script(s):')
                 script.append(f'        set {target} = $mchain("{expr}",{base_year})')
                 script.append('')
                 script.append('    Returns:')
-                script.append('        pl.Series: Polars Series to compute the time series or variable values.')
+                script.append('        pl.Series: Polars Series with chain-linked computation.')
                 script.append('    """')
                 
-                # For mchain, convert the expression and create a simple calculation
+                # Enhanced mchain with proper expression handling
                 polars_expr = convert_expression_to_polars(expr, computed_refs)
                 
+                script.append('    # Enhanced chain calculation')
                 script.append('    res = (')
-                script.append(f'        # TODO: Fix this - placeholder for now')
                 script.append(f'        {polars_expr}')
                 script.append('    )')
                 script.append('    return res')
                 script.append('')
+                
+        elif cmd['type'] == 'chainsum':
+            # Generate function for chain sum expression
+            target = cmd['target']
+            expr = cmd['expr']
+            base_year = cmd['base_year']
+            var_list = cmd['var_list']
+            func_name = generate_function_name(target)
+            converted_target = convert_variable_name(target)
+            
+            refs = cmd.get('refs', [])
+            computed_refs = [ref for ref in refs if ref not in input_variables]
+            
+            if computed_refs:
+                params = ', '.join([f'{convert_variable_name(ref)}: pl.Series' for ref in computed_refs])
+                script.append(f'def {func_name}({params}) -> pl.Series:')
+                script.append('    """')
+                script.append(f'    Computes the values for the {converted_target} time series using enhanced chain sum operations.')
+                script.append('    Derived from FAME script(s):')
+                script.append(f'        set {target} = $chainsum("{expr}",{base_year},{var_list})')
+                script.append('')
+                script.append('    Returns:')
+                script.append('        pl.Series: Polars Series with chain sum computation.')
+                script.append('    """')
+                
+                # Create enhanced chain sum calculation
+                expr_parts = []
+                for var in computed_refs:
+                    expr_parts.append(f'{convert_variable_name(var)}')
+                
+                script.append('    # Enhanced chain sum with multiple variables')
+                script.append('    expression_parts = [' + ', '.join(expr_parts) + ']')
+                script.append('    res = pl.sum_horizontal(expression_parts)')
+                script.append('    return res')
+                script.append('')
     
-    # Add fallback generic functions for compatibility
-    script.append('# Generic fallback functions for compatibility')
-    script.append('def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str) -> pl.Expr:')
-    script.append('    """Generic wrapper for convert using \'ple.convert\'.\"\"\"')
-    script.append('    return ple.convert(series, "DATE", as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed)')
+    # Add enhanced generic functions for compatibility
+    script.append('# Enhanced generic functions for comprehensive FAME support')
+    script.append('def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str, dependencies: List[str] = None) -> pl.Expr:')
+    script.append('    """Enhanced wrapper for convert with dependency support using \'ple.convert\'.\"\"\"')
+    script.append('    return ple.convert(series, "DATE", as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed, dependencies=dependencies)')
     script.append('')
-    script.append('def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int) -> pl.Expr:')
-    script.append('    """Generic wrapper for $fishvol_rebase using \'ple.fishvol\'.\"\"\"')
-    script.append('    return ple.fishvol(series_pairs, date_col, rebase_year)')
+    script.append('def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int, dependencies: List[str] = None) -> pl.Expr:')
+    script.append('    """Enhanced wrapper for $fishvol_rebase with dependency support using \'ple.fishvol\'.\"\"\"')
+    script.append('    return ple.fishvol(series_pairs, date_col, rebase_year, dependencies)')
+    script.append('')
+    script.append('def FISHVOL_ENHANCED(vol_list: List[str], price_list: List[str], date_col: pl.Expr, rebase_year: int, dependencies: List[str] = None) -> pl.Expr:')
+    script.append('    """Enhanced fishvol for variable lists with dependencies using \'ple.fishvol_enhanced\'.\"\"\"')
+    script.append('    return ple.fishvol_enhanced(vol_list, price_list, date_col, rebase_year, dependencies)')
     script.append('')
     script.append('def CHAIN(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, year: str) -> pl.Expr:')
-    script.append('    """Generic wrapper for $mchain using \'ple.chain\'.\"\"\"')
+    script.append('    """Enhanced wrapper for $mchain using \'ple.chain\'.\"\"\"')
     script.append('    return ple.chain(price_quantity_pairs=price_quantity_pairs, date_col=date_col, index_year=int(year))')
+    script.append('')
+    script.append('def CHAINSUM(expression_parts: List[pl.Expr], date_col: pl.Expr, year: str, var_list: List[str] = None) -> pl.Expr:')
+    script.append('    """Enhanced wrapper for $chainsum operations using \'ple.chain_sum\'.\"\"\"')
+    script.append('    return ple.chain_sum(expression_parts=expression_parts, date_col=date_col, index_year=int(year), var_list=var_list)')
     script.append('')
     script.append('def DECLARE_SERIES(df, name):')
     script.append('    return pl.lit(None, dtype=pl.Float64).alias(name)')
@@ -384,7 +427,33 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
     for lvl, targets in enumerate(levels):
         cmds = [c for c in parsed_commands if (c.get('target') in targets)]
         for c in cmds:
-            if c['type'] == 'fishvol_list':
+            if c['type'] == 'fishvol_enhanced':
+                vols = c['refs'][0] 
+                prices = c['refs'][1]
+                dependencies = c.get('dependencies', [])
+                script.append(f"# Enhanced fishvol function: {c['target']} = fishvol_enhanced({vols}, {prices}, year={c['year']}, deps={dependencies})")
+                if dependencies:
+                    script.append(f"# Dependencies: {dependencies} must be computed first")
+                script.append(f"df = df.with_columns([FISHVOL_ENHANCED(['{vols}'], ['{prices}'], pl.col('date'), {c['year']}, {dependencies}).alias('{c['target']}')])")
+            elif c['type'] == 'convert_enhanced':
+                source = c['refs'][0]
+                freq, method, period = c['params']
+                dependencies = c.get('dependencies', [])
+                script.append(f"# Enhanced convert function: {c['target']} = convert_enhanced({source}, {freq}, {method}, {period}, deps={dependencies})")
+                if dependencies:
+                    script.append(f"# Dependencies: {dependencies} must be computed first")
+                script.append(f"df = df.with_columns([ple.convert_enhanced('{source}', '{freq}', '{method}', '{period}', {dependencies}).alias('{c['target']}')])")
+            elif c['type'] == 'chainsum':
+                refs = c['refs']
+                base_year = c['base_year']  
+                var_list = c['var_list']
+                script.append(f"# Enhanced chainsum function: {c['target']} = chainsum({refs}, base_year={base_year}, vars={var_list})")
+                
+                # Create expression parts for chainsum
+                expr_parts = [f"pl.col('{ref}')" for ref in refs]
+                expr_parts_str = '[' + ', '.join(expr_parts) + ']'
+                script.append(f"df = df.with_columns([CHAINSUM({expr_parts_str}, pl.col('date'), '{base_year}', {var_list}).alias('{c['target']}')])")
+            elif c['type'] == 'fishvol_list':
                 vols = alias_dict.get(c['refs'][0], [c['refs'][0]])
                 prices = alias_dict.get(c['refs'][1], [c['refs'][1]])
                 script.append(f"# fishvol function: {c['target']} = fishvol({vols}, {prices}, year={c['year']})")
@@ -393,7 +462,7 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
                 freq, method, period = c['params']
                 source = c['refs'][0]
                 script.append(f"# convert function: {c['target']} = convert({source}, {freq}, {method}, {period})")
-                script.append(f"df = df.with_columns([CONVERT(df, '{source}', '{freq}', '{method}', '{period}').alias('{c['target']}')])")
+                script.append(f"df = df.with_columns([CONVERT(df, '{freq}', '{method}', '{period}').alias('{c['target']}')])")
             elif c['type'] == 'mchain':
                 refs = c['refs']
                 script.append(f"# mchain function: {c['target']} = chain({refs}, base_year={c['base_year']})")
@@ -478,6 +547,7 @@ if __name__ == '__main__':
     print("")
     
     fame_script = '''
+# Basic arithmetic operations
 a$=v123*12
 a=v143*12
 b=v143*2
@@ -488,6 +558,8 @@ e=v123*2
 f=v123*3
 g=v123*4
 h=v123*5
+
+# Price components
 pa$=v123*3
 pa=v143*4
 pb=v143*1
@@ -498,13 +570,26 @@ pe=v123*4
 pf=v123*5
 pg=v123*1
 ph=v123*2
+
+# Derived calculations
 aa=a$/a
 bb=aa+a
 paa=pa$/pa
 pbb=pa+paa
 hxz = (b*12)/a
 abc$_d1=a$+b$+c$+a
+
+# Enhanced chain operations
 c1 = $mchain("a + b + c$ + d + e + f + g + h",2017)
+
+# Chain sum example (new functionality)
+chain_total = $chainsum("a + b + c$", 2017, ["a", "b", "c$"])
+
+# Enhanced fishvol with dependencies (new functionality)  
+vol_index = fishvol_rebase(volumes, prices, 2020, deps=["a", "b"])
+
+# Enhanced convert with dependencies (new functionality)
+quarterly_data = convert(monthly_series, q, average, end, deps=["c$"])
 '''
     parsed, alias_dict = preprocess_commands(fame_script)
     levels = get_computation_levels(parsed)

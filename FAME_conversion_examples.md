@@ -4,9 +4,61 @@
   <img src="logos/fame2pygen.png" alt="Fame2PyGen Logo" width="400"/>
 </div>
 
-This document shows examples of how various FAME functions are converted to Python using the Fame2PyGen system.
+This document shows examples of how various FAME functions are converted to Python using the Fame2PyGen system, including the NEW enhanced chain sum operations.
 
 ## Core FAME Functions Supported
+
+### NEW: Enhanced Chain Sum Operations
+
+**FAME:**
+```fame
+# Chain sum with variable lists and dependencies
+set aggregated_output = $chainsum("comp1 + comp2 + comp3", 2020, ["comp1", "comp2", "comp3"])
+```
+**Python Conversion:**
+```python
+from formulas import CHAINSUM
+
+# Enhanced chain sum with dependency tracking
+pdf = pdf.with_columns([
+    CHAINSUM([pl.col("comp1"), pl.col("comp2"), pl.col("comp3")], 
+             pl.col("date"), "2020", ["comp1", "comp2", "comp3"]).alias("aggregated_output")
+])
+```
+
+### NEW: Enhanced FISHVOL with Dependencies
+
+**FAME:**
+```fame
+# Enhanced fishvol with explicit dependencies
+set volume_index = fishvol_rebase(volumes, prices, 2020, deps=["comp1", "aggregated_output"])
+```
+**Python Conversion:**
+```python  
+from formulas import FISHVOL_ENHANCED
+
+pdf = pdf.with_columns([
+    FISHVOL_ENHANCED(["volumes"], ["prices"], pl.col("date"), 2020, 
+                     dependencies=["comp1", "aggregated_output"]).alias("volume_index")
+])
+```
+
+### NEW: Enhanced CONVERT with Dependencies
+
+**FAME:**
+```fame  
+# Enhanced convert with dependency management
+set quarterly_data = convert(monthly_series, q, average, end, deps=["volume_index"])
+```
+**Python Conversion:**
+```python
+from ple import convert_enhanced
+
+pdf = pdf.with_columns([
+    convert_enhanced("monthly_series", "q", "average", "end", 
+                    dependencies=["volume_index"]).alias("quarterly_data")
+])
+```
 
 ### 1. Mathematical Operations
 ```fame

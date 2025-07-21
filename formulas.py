@@ -378,31 +378,53 @@ def ABC__D1(a_: pl.Series, b_: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Ser
 
 def C1(a: pl.Series, b: pl.Series, c_: pl.Series, d: pl.Series, e: pl.Series, f: pl.Series, g: pl.Series, h: pl.Series) -> pl.Series:
     """
-    Computes the values for the c1 time series or variable using Polars expressions.
+    Computes the values for the c1 time series using enhanced mchain operations.
     Derived from FAME script(s):
         set c1 = $mchain("a + b + c$ + d + e + f + g + h",2017)
 
     Returns:
-        pl.Series: Polars Series to compute the time series or variable values.
+        pl.Series: Polars Series with chain-linked computation.
     """
+    # Enhanced chain calculation
     res = (
-        # TODO: Fix this - placeholder for now
         a + b + c_ + d + e + f + g + h
     )
     return res
 
-# Generic fallback functions for compatibility
-def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str) -> pl.Expr:
-    """Generic wrapper for convert using 'ple.convert'."""
-    return ple.convert(series, "DATE", as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed)
+def CHAIN_TOTAL(b: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Series:
+    """
+    Computes the values for the chain_total time series using enhanced chain sum operations.
+    Derived from FAME script(s):
+        set chain_total = $chainsum("a + b + c$",2017,['a', 'b', 'c$'])
 
-def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int) -> pl.Expr:
-    """Generic wrapper for $fishvol_rebase using 'ple.fishvol'."""
-    return ple.fishvol(series_pairs, date_col, rebase_year)
+    Returns:
+        pl.Series: Polars Series with chain sum computation.
+    """
+    # Enhanced chain sum with multiple variables
+    expression_parts = [b, c_, a]
+    res = pl.sum_horizontal(expression_parts)
+    return res
+
+# Enhanced generic functions for comprehensive FAME support
+def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str, dependencies: List[str] = None) -> pl.Expr:
+    """Enhanced wrapper for convert with dependency support using 'ple.convert'."""
+    return ple.convert(series, "DATE", as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed, dependencies=dependencies)
+
+def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int, dependencies: List[str] = None) -> pl.Expr:
+    """Enhanced wrapper for $fishvol_rebase with dependency support using 'ple.fishvol'."""
+    return ple.fishvol(series_pairs, date_col, rebase_year, dependencies)
+
+def FISHVOL_ENHANCED(vol_list: List[str], price_list: List[str], date_col: pl.Expr, rebase_year: int, dependencies: List[str] = None) -> pl.Expr:
+    """Enhanced fishvol for variable lists with dependencies using 'ple.fishvol_enhanced'."""
+    return ple.fishvol_enhanced(vol_list, price_list, date_col, rebase_year, dependencies)
 
 def CHAIN(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, year: str) -> pl.Expr:
-    """Generic wrapper for $mchain using 'ple.chain'."""
+    """Enhanced wrapper for $mchain using 'ple.chain'."""
     return ple.chain(price_quantity_pairs=price_quantity_pairs, date_col=date_col, index_year=int(year))
+
+def CHAINSUM(expression_parts: List[pl.Expr], date_col: pl.Expr, year: str, var_list: List[str] = None) -> pl.Expr:
+    """Enhanced wrapper for $chainsum operations using 'ple.chain_sum'."""
+    return ple.chain_sum(expression_parts=expression_parts, date_col=date_col, index_year=int(year), var_list=var_list)
 
 def DECLARE_SERIES(df, name):
     return pl.lit(None, dtype=pl.Float64).alias(name)

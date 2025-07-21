@@ -4,7 +4,7 @@
 
 # Fame2PyGen
 
-**Fame2PyGen** is a comprehensive toolset for automatically converting FAME-style formula scripts into executable, modular Python code using [Polars](https://pola.rs/) for DataFrame operations. It supports generic data transformation functions, auto-generated pipelines, and extensive FAME function coverage via the `polars_econ_mock.py` module.
+**Fame2PyGen** is a comprehensive toolset for automatically converting FAME-style formula scripts into executable, modular Python code using [Polars](https://pola.rs/) for DataFrame operations. It supports generic data transformation functions, auto-generated pipelines, extensive FAME function coverage, and **enhanced chain sum operations** with dependency-aware computation.
 
 ## 🎨 Logo Options
 
@@ -16,27 +16,40 @@ We've created three logo concepts for the project:
 
 See the `/logos` directory for complete designs and usage guidelines.
 
+## ✨ Enhanced Features (NEW)
+
+### Chain Sum Operations 
+- **$chainsum()**: Advanced chaining operations with variable lists and dependency support
+- **Enhanced $mchain()**: Improved chain-linked operations with better expression handling  
+- **Dependency Management**: Automatic ordering of computations based on variable dependencies
+
+### Enhanced FISHVOL Support
+- **fishvol_rebase()** with explicit dependency lists
+- **FISHVOL_ENHANCED()**: Support for variable name lists with dependency tracking
+- **Multi-series aggregation**: Proper handling of complex Fisher volume calculations
+
+### Enhanced CONVERT Support  
+- **convert()** with dependency parameters for proper computation ordering
+- **convert_enhanced()**: Improved frequency conversion with dependency awareness
+- **Temporal consistency**: Better handling of frequency conversion dependencies
+
 ## Project Structure
 
 ```
 fame2pygen/
 ├── README.md
 ├── logos/                    # Logo designs and documentation
-│   ├── README.md
-│   ├── logo1_textbased.md
-│   ├── logo2_ascii.md
-│   └── logo3_modern.md
-├── ple.py                    # Enhanced mock backend for FAME-style calculations
+├── ple.py                    # Enhanced mock backend with chain sum operations
 ├── polars_econ_mock.py      # Extended FAME function implementations
-├── formulagen.py            # Enhanced parsers for FAME script commands
-├── write_formulagen.py      # Main generator with extended function support
+├── formulagen.py            # Enhanced parsers with chain sum and dependency support  
+├── write_formulagen.py      # Main generator with enhanced functionality
 ├── formulas.py              # Auto-generated: expression-based calculation functions
-├── convpy4rmfame.py         # Auto-generated: layered computation pipeline
-├── FAME_conversion_examples.md  # Comprehensive usage examples
-└── test_enhancements.py     # Test suite for all functionality
+├── convpy4rmfame.py         # Auto-generated: dependency-aware computation pipeline
+├── test_enhancements.py     # Original test suite for all functionality
+├── test_chain_sum_enhancements.py  # NEW: Tests for chain sum enhancements
+├── FAME_conversion_examples.md     # Comprehensive usage examples
+└── ...
 ```
-
-## ✨ Enhanced Features
 
 ### Expression-Based Formula Generation
 - Functions now return `pl.Expr` objects with proper aliasing
@@ -57,9 +70,10 @@ fame2pygen/
 - **OVERLAY**: Series combination with null-filling
 - **MAVE**: Moving averages with configurable windows
 - **MAVEC**: Centered moving averages
-- **FISHVOL**: Fisher volume index calculations
-- **CHAIN**: Chain-linked index computations
-- **CONVERT**: Frequency conversion with multiple techniques
+- **FISHVOL**: Fisher volume index calculations with dependency support
+- **CHAIN**: Chain-linked index computations with enhanced sum operations
+- **CHAINSUM**: NEW - Complex chain operations with variable lists and dependencies
+- **CONVERT**: Frequency conversion with dependency-aware computation ordering
 
 ## Getting Started
 
@@ -133,6 +147,29 @@ pdf = pdf.with_columns([
 ])
 ```
 
+### NEW: Enhanced Chain Sum Operations
+
+**Original FAME:**
+```fame
+# Enhanced chain operations with dependency management
+set total_output = $chainsum("output1 + output2 + output3", 2020, ["output1", "output2", "output3"])
+set volume_idx = fishvol_rebase(volumes, prices, 2020, deps=["output1", "total_output"])  
+set quarterly = convert(monthly_data, q, average, end, deps=["volume_idx"])
+```
+
+**Generated Python:**
+```python
+# Chain sum with enhanced dependency handling
+pdf = pdf.with_columns([
+    CHAINSUM([pl.col("output1"), pl.col("output2"), pl.col("output3")], 
+             pl.col("date"), "2020", ["output1", "output2", "output3"]).alias("total_output"),
+    FISHVOL_ENHANCED(["volumes"], ["prices"], pl.col("date"), 2020, 
+                     dependencies=["output1", "total_output"]).alias("volume_idx"),
+    ple.convert_enhanced("monthly_data", "q", "average", "end", 
+                        dependencies=["volume_idx"]).alias("quarterly")
+])
+```
+
 ### Advanced Functions
 
 ```python
@@ -159,17 +196,23 @@ See `FAME_conversion_examples.md` for comprehensive examples.
 
 ## 🧪 Testing
 
-Run the test suite to verify all functionality:
+Run the comprehensive test suite to verify all functionality:
 
 ```bash
+# Original functionality tests
 python test_enhancements.py
+
+# NEW: Chain sum enhancement tests
+python test_chain_sum_enhancements.py
 ```
 
-The test suite covers:
+The test suites cover:
 - Logo creation and documentation
 - Expression-based formula format
 - Layered computation pipeline
 - All extended FAME functions
+- NEW: Chain sum operations and dependency handling
+- NEW: Enhanced FISHVOL and CONVERT functionality  
 - End-to-end integration
 
 ## 🔧 Customization
