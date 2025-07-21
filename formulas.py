@@ -362,7 +362,7 @@ def HXZ(b: pl.Series, a: pl.Series) -> pl.Series:
     )
     return res
 
-def ABC__D1(a_: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Series:
+def ABC__D1(a_: pl.Series, b_: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Series:
     """
     Computes the values for the abc__d1 time series or variable using Polars expressions.
     Derived from FAME script(s):
@@ -372,7 +372,7 @@ def ABC__D1(a_: pl.Series, c_: pl.Series, a: pl.Series) -> pl.Series:
         pl.Series: Polars Series to compute the time series or variable values.
     """
     res = (
-        a_+pl.col("b_")+c_+a
+        a_+b_+c_+a
     )
     return res
 

@@ -12,46 +12,63 @@ import polars as pl
 import formulas
 df = pl.DataFrame({
     'date': pl.date_range(pl.date(2019, 1, 1), pl.date(2025, 1, 1), '1mo', eager=True),
-    'prices_g1': pl.Series('prices_g1', range(1, 74)),
-    'v_a': pl.Series('v_a', range(1, 74)),
-    'v_b': pl.Series('v_b', range(1, 74)),
+    'v123': pl.Series('v123', range(1, 74)),
+    'v143': pl.Series('v143', range(1, 74)),
 })
-vols_g1 = ['v_a', 'v_b']
-prices_g1 = ['p_a', 'p_b']
-all_vols = ['v_a', 'v_b']
-list_of_vol_aliases = ['v_a', 'v_b']
 # ---- DECLARE SERIES ----
-# Declare series: gdp_q
-df = df.with_columns([formulas.DECLARE_SERIES(df, 'gdp_q')])
-# Declare series: cpi_q
-df = df.with_columns([formulas.DECLARE_SERIES(df, 'cpi_q')])
-# Declare series: vol_index_1
-df = df.with_columns([formulas.DECLARE_SERIES(df, 'vol_index_1')])
-# Declare series: gdp_q
-df = df.with_columns([formulas.DECLARE_SERIES(df, 'gdp_q')])
-# Declare series: cpi_q
-df = df.with_columns([formulas.DECLARE_SERIES(df, 'cpi_q')])
-# Declare series: vol_index_1
-df = df.with_columns([formulas.DECLARE_SERIES(df, 'vol_index_1')])
 # ---- COMPUTATIONS ----
-# convert function: gdp_q = convert(v_a, q, ave, end)
-df = df.with_columns([formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end').alias('gdp_q')])
-# convert function: gdp_q = convert(v_b, q, ave, end)
-df = df.with_columns([formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end').alias('gdp_q')])
-# Mathematical expression: vol_index_1 = v_a + v_b
-df = df.with_columns([(pl.col("v_a") + pl.col("v_b")).alias('vol_index_1')])
-# convert function: gdp_q = convert(v_a, q, ave, end)
-df = df.with_columns([formulas.CONVERT(df, 'v_a', 'q', 'ave', 'end').alias('gdp_q')])
-# convert function: gdp_q = convert(v_b, q, ave, end)
-df = df.with_columns([formulas.CONVERT(df, 'v_b', 'q', 'ave', 'end').alias('gdp_q')])
-# fishvol function: gdp_real = fishvol(['v_a'], ['p_a', 'p_b'], year=2020)
-df = df.with_columns([formulas.FISHVOL(df, ['v_a'], ['p_a', 'p_b'], year=2020).alias('gdp_real')])
-# fishvol function: gdp_real = fishvol(['v_b'], ['p_a', 'p_b'], year=2020)
-df = df.with_columns([formulas.FISHVOL(df, ['v_b'], ['p_a', 'p_b'], year=2020).alias('gdp_real')])
-# Mathematical expression: vol_index_1 = v_a + v_b
-df = df.with_columns([(pl.col("v_a") + pl.col("v_b")).alias('vol_index_1')])
-# mchain function: gdp_chained = chain(['gdp_q', 'cpi_q'], base_year=2022)
-df = df.with_columns([formulas.CHAIN(df, ['gdp_q', 'cpi_q'], base_year=2022).alias('gdp_chained')])
-# Mathematical expression: final_output = gdp_chained - vol_index_1
-df = df.with_columns([(pl.col("gdp_chained") - pl.col("vol_index_1")).alias('final_output')])
+# Mathematical expression: a$ = v123*12
+df = df.with_columns([(pl.col("v123")*12).alias('a$')])
+# Mathematical expression: a = v143*12
+df = df.with_columns([(pl.col("v143")*12).alias('a')])
+# Mathematical expression: b = v143*2
+df = df.with_columns([(pl.col("v143")*2).alias('b')])
+# Mathematical expression: b$ = v123*6
+df = df.with_columns([(pl.col("v123")*6).alias('b$')])
+# Mathematical expression: c$ = v123*5
+df = df.with_columns([(pl.col("v123")*5).alias('c$')])
+# Mathematical expression: d = v123*1
+df = df.with_columns([(pl.col("v123")*1).alias('d')])
+# Mathematical expression: e = v123*2
+df = df.with_columns([(pl.col("v123")*2).alias('e')])
+# Mathematical expression: f = v123*3
+df = df.with_columns([(pl.col("v123")*3).alias('f')])
+# Mathematical expression: g = v123*4
+df = df.with_columns([(pl.col("v123")*4).alias('g')])
+# Mathematical expression: h = v123*5
+df = df.with_columns([(pl.col("v123")*5).alias('h')])
+# Mathematical expression: pa$ = v123*3
+df = df.with_columns([(pl.col("v123")*3).alias('pa$')])
+# Mathematical expression: pa = v143*4
+df = df.with_columns([(pl.col("v143")*4).alias('pa')])
+# Mathematical expression: pb = v143*1
+df = df.with_columns([(pl.col("v143")*1).alias('pb')])
+# Mathematical expression: pb$ = v123*1
+df = df.with_columns([(pl.col("v123")*1).alias('pb$')])
+# Mathematical expression: pc$ = v123*2
+df = df.with_columns([(pl.col("v123")*2).alias('pc$')])
+# Mathematical expression: pd = v123*3
+df = df.with_columns([(pl.col("v123")*3).alias('pd')])
+# Mathematical expression: pe = v123*4
+df = df.with_columns([(pl.col("v123")*4).alias('pe')])
+# Mathematical expression: pf = v123*5
+df = df.with_columns([(pl.col("v123")*5).alias('pf')])
+# Mathematical expression: pg = v123*1
+df = df.with_columns([(pl.col("v123")*1).alias('pg')])
+# Mathematical expression: ph = v123*2
+df = df.with_columns([(pl.col("v123")*2).alias('ph')])
+# Mathematical expression: aa = a$/a
+df = df.with_columns([(pl.col("a$")/pl.col("a")).alias('aa')])
+# Mathematical expression: paa = pa$/pa
+df = df.with_columns([(pl.col("pa$")/pl.col("pa")).alias('paa')])
+# Mathematical expression: hxz = (b*12)/a
+df = df.with_columns([((pl.col("b")*12)/pl.col("a")).alias('hxz')])
+# Mathematical expression: abc$_d1 = a$+b$+c$+a
+df = df.with_columns([(pl.col("a$")+pl.col("b$")+pl.col("c$")+pl.col("a")).alias('abc$_d1')])
+# mchain function: c1 = chain(['a', 'b', 'c$', 'd', 'e', 'f', 'g', 'h'], base_year=2017)
+df = df.with_columns([formulas.CHAIN(df, ['a', 'b', 'c$', 'd', 'e', 'f', 'g', 'h'], base_year=2017).alias('c1')])
+# Mathematical expression: bb = aa+a
+df = df.with_columns([(pl.col("aa")+pl.col("a")).alias('bb')])
+# Mathematical expression: pbb = pa+paa
+df = df.with_columns([(pl.col("pa")+pl.col("paa")).alias('pbb')])
 print('Computation finished')

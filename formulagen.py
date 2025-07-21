@@ -54,6 +54,22 @@ def parse_mchain_command(line):
             'base_year': m.group(3)
         }
     
+    # Handle mchain without quotes around year: $mchain("expr",year)
+    m3 = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*\$mchain\("([^"]+)",\s*([0-9]+)\)', line)
+    if m3:
+        expr = m3.group(2)
+        # Extract variable references (exclude pure numbers and operators)
+        refs = []
+        for match in re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr):
+            refs.append(match)
+        return {
+            'type': 'mchain',
+            'target': m3.group(1),
+            'expr': expr,
+            'refs': refs,
+            'base_year': m3.group(3)
+        }
+    
     # Handle malformed mchain: $mchain("expr"year") - missing comma
     m2 = re.match(r'([a-zA-Z0-9_$]+)\s*=\s*\$mchain\("([^"]+)"([0-9]+)"\)', line)
     if m2:
