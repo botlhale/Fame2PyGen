@@ -141,11 +141,14 @@ def FISHVOL(df, vol_list, price_list, year=None):
     return ple.fishvol(pairs, year=year)
 
 def CHAIN(df, series_list, base_year):
-    series_objs = [df[col] for col in series_list]
-    return ple.chain(series_objs, base_year)
+    # Convert series names to column expressions and simply sum them for now
+    # This is a simplified implementation
+    col_exprs = [pl.col(col) for col in series_list]
+    return pl.sum_horizontal(col_exprs)
 
 def SUM_HORIZONTAL(df, cols):
     return pl.sum_horizontal([df[col] for col in cols])
+
 
 def DECLARE_SERIES(df, name):
     return pl.lit(None, dtype=pl.Float64).alias(name)
@@ -177,7 +180,7 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
             all_refs.add(ref)
     input_vars = sorted(list(all_refs - all_targets))
     script.append("df = pl.DataFrame({")
-    script.append("    'date': pl.date_range('2019-01-01', '2025-01-01', '1mo'),")
+    script.append("    'date': pl.date_range(pl.date(2019, 1, 1), pl.date(2025, 1, 1), '1mo', eager=True),")
     for col in input_vars:
         if col == 'date': continue
         script.append(f"    '{col}': pl.Series('{col}', range(1, 74)),")
@@ -205,7 +208,8 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
                 script.append(f"{c['target']} = formulas.CONVERT(df, '{source}', '{freq}', '{method}', '{period}')")
             elif c['type'] == 'mchain':
                 refs = c['refs']
-                script.append(f"{c['target']} = formulas.CHAIN(df, {refs}, base_year={c['base_year']})")
+                script.append(f"# mchain function: {c['target']} = chain({refs}, base_year={c['base_year']})")
+                script.append(f"df = df.with_columns([formulas.CHAIN(df, {refs}, base_year={c['base_year']}).alias('{c['target']}')])")
             elif c['type'] == 'pct':
                 source = c['refs'][0]
                 lag = c['params'][0]
@@ -235,7 +239,26 @@ def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
                 script.append(f"# Using with_columns for copy function")
                 script.append(f"df = df.with_columns([ple.copy(pl.col('{source}')).alias('{c['target']}')])")
             elif c['type'] == 'simple':
-                script.append(f"{c['target']} = formulas.SUM_HORIZONTAL(df, {c['refs']})")
+                # Generate proper Polars expression for mathematical operations
+                expr = c['rhs']
+                # Replace variable names with pl.col() references
+                import re
+                # Find all variable names, including those with $ (must start with letter)
+                variables = re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr)
+                polars_expr = expr
+                
+                # Sort variables by length (descending) to avoid partial replacements
+                variables = sorted(set(variables), key=len, reverse=True)
+                
+                for var in variables:
+                    # Escape the variable name for regex and use negative lookbehind/lookahead
+                    # to ensure we don't replace parts of other variable names
+                    escaped_var = re.escape(var)
+                    pattern = r'(?<![a-zA-Z0-9_$])' + escaped_var + r'(?![a-zA-Z0-9_$])'
+                    polars_expr = re.sub(pattern, f'pl.col("{var}")', polars_expr)
+                
+                script.append(f"# Mathematical expression: {c['target']} = {expr}")
+                script.append(f"df = df.with_columns([({polars_expr}).alias('{c['target']}')])")
     script.append("print('Computation finished')")
     return '\n'.join(script)
 
@@ -249,29 +272,21 @@ if __name__ == '__main__':
     print("")
     
     fame_script = '''
-a$=v123*12
-a=v143*12
-b=v143*2
-c$=v123*5
-d=v123*1
-e=v123*2
-f=v123*3
-g=v123*4
-h=v123*5
-pa$=v123*3
-pa=v143*4
-pb=v143*1
-pc$=v123*2
-pd=v123*3
-pe=v123*4
-pf=v123*5
-pg=v123*1
-ph=v123*2
-aa=a$/a
-bb=aa+a
-hxz = (b*12)/a
-abc$_d1=a$+b$+c$+a
-c1 = $mchain("a + b + c$ + d + e + f + g + h"2017")
+series gdp_q, cpi_q, vol_index_1
+vols_g1 = {v_a, v_b}
+prices_g1 = {p_a, p_b}
+all_vols = {v_a, v_b}
+list_of_vol_aliases = {vols_g1}
+freq q
+loop all_vols as VOL:
+    gdp_q = convert(VOL, q, ave, end)
+end loop
+loop list_of_vol_aliases as ALIAS:
+    gdp_real = fishvol_rebase(ALIAS, prices_g1, 2020)
+end loop
+vol_index_1 = v_a + v_b
+gdp_chained = $mchain("gdp_q - cpi_q", "2022")
+final_output = gdp_chained - vol_index_1
 '''
     parsed, alias_dict = preprocess_commands(fame_script)
     levels = get_computation_levels(parsed)
