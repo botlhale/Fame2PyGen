@@ -4,9 +4,64 @@
   <img src="logos/fame2pygen.png" alt="Fame2PyGen Logo" width="400"/>
 </div>
 
-This document shows examples of how various FAME functions are converted to Python using the Fame2PyGen system.
+This document shows examples of how various FAME functions are converted to Python using the Fame2PyGen system, including the **ENHANCED existing functions** with new chainsum operations and dependency support.
 
 ## Core FAME Functions Supported
+
+### ENHANCED: Chain Sum Operations using Enhanced CHAIN Function
+
+**FAME:**
+```fame
+# Chain sum with variable lists and dependencies using enhanced existing function
+set aggregated_output = $chainsum("comp1 + comp2 + comp3", 2020, ["comp1", "comp2", "comp3"])
+```
+**Python Conversion:**
+```python
+from formulas import CHAIN
+
+# Enhanced CHAIN function now supports both traditional chain and new chainsum operations
+pdf = pdf.with_columns([
+    CHAIN(expression_parts=[pl.col("comp1"), pl.col("comp2"), pl.col("comp3")], 
+          date_col=pl.col("date"), index_year=2020, var_list=["comp1", "comp2", "comp3"],
+          operation="chainsum").alias("aggregated_output")
+])
+```
+
+### ENHANCED: FISHVOL Function with Dependencies
+
+**FAME:**
+```fame
+# Enhanced fishvol with explicit dependencies using enhanced existing function
+set volume_index = fishvol_rebase(volumes, prices, 2020, deps=["comp1", "aggregated_output"])
+```
+**Python Conversion:**
+```python  
+from formulas import FISHVOL
+
+# Enhanced FISHVOL function now supports dependency parameters
+pdf = pdf.with_columns([
+    FISHVOL(vol_list=["volumes"], price_list=["prices"], date_col=pl.col("date"), 
+            rebase_year=2020, dependencies=["comp1", "aggregated_output"]).alias("volume_index")
+])
+```
+
+### ENHANCED: CONVERT Function with Dependencies
+
+**FAME:**
+```fame  
+# Enhanced convert with dependency management using enhanced existing function
+set quarterly_data = convert(monthly_series, q, average, end, deps=["volume_index"])
+```
+**Python Conversion:**
+```python
+from formulas import CONVERT
+
+# Enhanced CONVERT function now supports dependency parameters
+pdf = pdf.with_columns([
+    CONVERT(source_var="monthly_series", freq="q", method="average", period="end", 
+            dependencies=["volume_index"]).alias("quarterly_data")
+])
+```
 
 ### 1. Mathematical Operations
 ```fame
