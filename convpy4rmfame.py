@@ -12,68 +12,58 @@ import polars as pl
 from formulas import *
 import ple
 
-# Example input dataframe for demonstration purposes
+# Base DataFrame (unfiltered)
 df = pl.DataFrame({
     'date': pl.date_range(pl.date(2019, 1, 1), pl.date(2025, 1, 1), '1mo', eager=True),
-    'monthly_series': pl.Series('monthly_series', range(1, 74)),
-    'prices': pl.Series('prices', range(1, 74)),
     'v123': pl.Series('v123', range(1, 74)),
     'v143': pl.Series('v143', range(1, 74)),
+    'prices': pl.Series('prices', range(1, 74)),
     'volumes': pl.Series('volumes', range(1, 74)),
 })
 
-# ---- DECLARE SERIES ----
-# (Declarations would be placed here if needed)
-
-# ---- COMPUTATIONS ----
-# Mathematical expression: a$ = v123*12
-df = df.with_columns([A_().alias('a$')])
-# Mathematical expression: a = v143*12
-df = df.with_columns([A().alias('a')])
-# Mathematical expression: b = v143*2
-df = df.with_columns([B().alias('b')])
-# Mathematical expression: b$ = v123*6
-df = df.with_columns([B_().alias('b$')])
-# Mathematical expression: c$ = v123*5
-df = df.with_columns([C_().alias('c$')])
-# Mathematical expression: d = v123*1
-df = df.with_columns([D().alias('d')])
-# Mathematical expression: e = v123*2
-df = df.with_columns([E().alias('e')])
-# Mathematical expression: f = v123*3
-df = df.with_columns([F().alias('f')])
-# Mathematical expression: g = v123*4
-df = df.with_columns([G().alias('g')])
-# Mathematical expression: h = v123*5
-df = df.with_columns([H().alias('h')])
-# Mathematical expression: pa$ = v123*3
-df = df.with_columns([PA_().alias('pa$')])
-# Mathematical expression: pa = v143*4
-df = df.with_columns([PA().alias('pa')])
-# Mathematical expression: pb = v143*1
-df = df.with_columns([PB().alias('pb')])
-# Mathematical expression: pb$ = v123*1
-df = df.with_columns([PB_().alias('pb$')])
-# Mathematical expression: pc$ = v123*2
-df = df.with_columns([PC_().alias('pc$')])
-# Mathematical expression: pd = v123*3
-df = df.with_columns([PD().alias('pd')])
-# Mathematical expression: pe = v123*4
-df = df.with_columns([PE().alias('pe')])
-# Mathematical expression: pf = v123*5
-df = df.with_columns([PF().alias('pf')])
-# Mathematical expression: pg = v123*1
-df = df.with_columns([PG().alias('pg')])
-# Mathematical expression: ph = v123*2
-df = df.with_columns([PH().alias('ph')])
-
-# Demonstration: CHAIN over multiple (price, quantity) pairs
-# Combines row-wise products of each pair and sums them into 'chain_value'
+# ---- MAIN PIPELINE (no date filtering) ----
+# --- Level 1: a, a$, b, b$, c$, d, e, f, g, h, pa, pa$, pb, pb$, pc$, pd, pe, pf, pg, ph
 df = df.with_columns([
-    ple.chain([
-        (pl.col('prices'), pl.col('volumes')),
-        (pl.col('v143'), pl.col('v123')),
-    ], date_col=pl.col('date')).alias('chain_value')
+    A().alias('a'),
+    A_().alias('a$'),
+    B().alias('b'),
+    B_().alias('b$'),
+    C_().alias('c$'),
+    D().alias('d'),
+    E().alias('e'),
+    F().alias('f'),
+    G().alias('g'),
+    H().alias('h'),
+    PA().alias('pa'),
+    PA_().alias('pa$'),
+    PB().alias('pb'),
+    PB_().alias('pb$'),
+    PC_().alias('pc$'),
+    PD().alias('pd'),
+    PE().alias('pe'),
+    PF().alias('pf'),
+    PG().alias('pg'),
+    PH().alias('ph'),
 ])
 
-# (Additional pipeline steps, such as frequency conversion or final formatting, would follow)
+# ---- FISHVOL SUB-PIPELINE for root 'vol_index' (filtered from 2020-01-01) ----
+df_fv_vol_index = df.filter(pl.col('date') >= pl.date(2020, 1, 1))
+# --- FV Level 1: vol_index
+df_fv_vol_index = df_fv_vol_index.with_columns([
+    FISHVOL_VOL_INDEX().alias('vol_index')
+])
+
+# ---- CONVERT SUB-PIPELINE to 'q' ----
+df_cv_q = None
+_cv_tmp = (df.select(['date', 'a'])
+.group_by_dynamic('date', every='1q')
+.agg(pl.col('a').mean().alias('a_q')))
+df_cv_q = _cv_tmp if df_cv_q is None else df_cv_q.join(_cv_tmp, on='date', how='full').select(pl.all().unique())
+
+# ---- FINAL MELT AND UNION ----
+main_long = df.select(['date', 'a', 'a$', 'b', 'b$', 'c$', 'd', 'e', 'f', 'g', 'h', 'pa', 'pa$', 'pb', 'pb$', 'pc$', 'pd', 'pe', 'pf', 'pg', 'ph']).melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE')
+fv_long_vol_index = df_fv_vol_index.select(pl.all().exclude(['v123','v143','prices','volumes'])).melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE')
+cv_long_q = (df_cv_q if df_cv_q is not None else pl.DataFrame({'date':[]})) 
+cv_long_q = cv_long_q.melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE') if df_cv_q is not None else cv_long_q
+final_long = pl.concat([main_long, fv_long_vol_index, cv_long_q], how='vertical_relaxed')
+print(final_long)
