@@ -5,10 +5,10 @@
 │      Economic Mock Functions              │
 └───────────────────────────────────────────┘
 """
-from typing import List, Tuple
 import polars as pl
+from typing import List, Tuple, Optional
 
-def fishvol(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr | None, rebase_year: int | None) -> pl.Expr:
+def fishvol(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: Optional[pl.Expr] = None, rebase_year: Optional[int] = None) -> pl.Expr:
     """
     Mock implementation of Fisher volume index calculation.
 
@@ -25,7 +25,7 @@ def fishvol(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr | Non
         return quantities[0]
     return pl.sum_horizontal(quantities)
 
-def chain(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr | None = None) -> pl.Expr:
+def chain(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: Optional[pl.Expr] = None) -> pl.Expr:
     """
     Mock implementation of chain-linked operation over multiple (price, quantity) pairs.
 
@@ -41,7 +41,7 @@ def chain(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr
         return products[0]
     return pl.sum_horizontal(products)
 
-def convert(series, date_col: str | None, as_freq: str | None, to_freq: str | None, technique: str | None, observed: str | None):
+def convert(series, date_col: Optional[str] = None, as_freq: Optional[str] = None, to_freq: Optional[str] = None, technique: Optional[str] = None, observed: Optional[str] = None):
     """
     Mock implementation of frequency conversion.
 
