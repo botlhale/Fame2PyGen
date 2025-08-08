@@ -1,37 +1,26 @@
 """
-┌─────────────────────────────────────┐
-│            Fame2PyGen               │
-│         FAME → Python               │
-│      Main Script Generator          │
-└─────────────────────────────────────┘
+┌───────────────────────────────────────────┐
+│            Fame2PyGen                     │
+│         FAME → Python                     │
+│      Main Script Generator                │
+└───────────────────────────────────────────┘
 """
 import re
+from collections import defaultdict, deque
+from typing import Dict, List, Tuple, Set
+
 import polars as pl
 import formulagen
 
-def variable_to_function_name(var):
-    """Convert a variable name to its corresponding function name."""
+def variable_to_function_name(var: str) -> str:
     if var.endswith('$'):
-        # Convert a$ to A_, pa$ to PA_, etc.
         return var[:-1].upper() + '_'
-    else:
-        # Convert a to A, pa to PA, etc.
-        return var.upper()
+    return var.upper()
 
-def should_use_function_call(target, expr):
-    """Determine if we should use a function call for this expression.
-    Only use function calls for simple expressions that reference base variables (v123, v143)."""
-    # Check if the expression only contains v123, v143, numbers, and basic operators
-    import re
-    # Remove all v123, v143, numbers, operators and whitespace
-    cleaned = re.sub(r'(v123|v143|\d+|[+\-*/().\s])', '', expr)
-    # If nothing is left, this is a simple expression that can use function calls
-    return len(cleaned) == 0
-
-def preprocess_commands(fame_script):
+def preprocess_commands(fame_script: str):
     lines = fame_script.strip().split('\n')
-    alias_dict = {}
-    expanded_lines = []
+    alias_dict: Dict[str, List[str]] = {}
+    expanded_lines: List[str] = []
     i = 0
     while i < len(lines):
         line = lines[i].strip()
@@ -45,10 +34,10 @@ def preprocess_commands(fame_script):
         expanded_lines.append(line)
         i += 1
 
-    def resolve_alias(alias):
+    def resolve_alias(alias: str) -> List[str]:
         if alias not in alias_dict:
             return [alias]
-        result = []
+        result: List[str] = []
         for item in alias_dict[alias]:
             if item in alias_dict:
                 result.extend(resolve_alias(item))
@@ -56,10 +45,10 @@ def preprocess_commands(fame_script):
                 result.append(item)
         return result
 
-    for k in alias_dict:
+    for k in list(alias_dict.keys()):
         alias_dict[k] = resolve_alias(k)
 
-    final_cmds = []
+    final_cmds: List[str] = []
     i = 0
     while i < len(expanded_lines):
         line = expanded_lines[i]
@@ -67,19 +56,15 @@ def preprocess_commands(fame_script):
         if loop_m:
             alias = loop_m.group(1)
             varname = loop_m.group(2)
-            block = []
+            block: List[str] = []
             i += 1
-            while not expanded_lines[i].startswith('end loop'):
+            while i < len(expanded_lines) and not expanded_lines[i].startswith('end loop'):
                 block.append(expanded_lines[i])
                 i += 1
-            if 'fishvol' in block[0]:
-                for a in alias_dict[alias]:
-                    new_block = [b.replace(varname, a) for b in block]
-                    final_cmds.extend(new_block)
-            else:
-                for item in alias_dict[alias]:
-                    for b in block:
-                        final_cmds.append(b.replace(varname, item))
+            # Expand loop bodies
+            for item in alias_dict.get(alias, []):
+                for b in block:
+                    final_cmds.append(b.replace(varname, item))
             i += 1
             continue
         final_cmds.append(line)
@@ -88,505 +73,193 @@ def preprocess_commands(fame_script):
     parsed = [formulagen.parse_command(cmd) for cmd in final_cmds if formulagen.parse_command(cmd)]
     return parsed, alias_dict
 
-def get_computation_levels(parsed_commands):
-    all_targets = set()
+def _collect_targets(parsed_commands: List[Dict]) -> Set[str]:
+    return {c['target'] for c in parsed_commands if c and 'target' in c}
+
+def _build_graph(parsed_commands: List[Dict]):
+    targets = _collect_targets(parsed_commands)
+    adj: Dict[str, List[str]] = defaultdict(list)
+    indeg: Dict[str, int] = defaultdict(int)
+    for node in targets:
+        indeg[node] = 0
     for c in parsed_commands:
-        if c['type'] == 'declaration':
-            all_targets.update(c['targets'])
-        elif 'target' in c:
-            all_targets.add(c['target'])
-    all_refs = set()
-    for c in parsed_commands:
-        for ref in c.get('refs', []):
-            all_refs.add(ref)
-    decls = [t for c in parsed_commands if c['type'] == 'declaration' for t in c['targets']]
-    input_vars = sorted(list(all_refs - all_targets))
-    deps = {}
-    for c in parsed_commands:
-        if c['type'] == 'declaration':
+        if not c or 'target' not in c:
             continue
-        if 'target' in c:
-            deps[c['target']] = set([r for r in c.get('refs', []) if r in all_targets])
-    levels = []
-    available = set(decls + input_vars)
-    remaining = set(deps.keys())
-    if decls:
-        levels.append(decls)
-    while remaining:
-        level = []
-        for t in list(remaining):
-            needed = deps.get(t, set())
-            if needed.issubset(available):
-                level.append(t)
-        if not level:
-            missing = set()
-            for t in remaining:
-                needed = deps.get(t, set())
-                missing.update(needed - available)
-            raise Exception(f"Circular or missing dependencies! Missing: {missing}")
+        tgt = c['target']
+        for ref in c.get('refs', []):
+            if ref in targets:
+                adj[ref].append(tgt)
+                indeg[tgt] += 1
+    return adj, indeg
+
+def _topo_levels(adj: Dict[str, List[str]], indeg: Dict[str, int]) -> List[List[str]]:
+    q = deque([n for n, d in indeg.items() if d == 0])
+    levels: List[List[str]] = []
+    visited = 0
+    while q:
+        level = sorted(list(q))
         levels.append(level)
-        available.update(level)
-        for t in level:
-            remaining.remove(t)
+        curr = list(q)
+        q.clear()
+        for n in curr:
+            visited += 1
+            for m in sorted(adj.get(n, [])):
+                indeg[m] -= 1
+                if indeg[m] == 0:
+                    q.append(m)
+    if visited != len(indeg):
+        cycl = [n for n, d in indeg.items() if d > 0]
+        raise ValueError(f"Cycle detected among nodes: {cycl}")
     return levels
 
-def convert_variable_name(name):
-    """Convert FAME variable names to Python-compatible names.
-    
-    Args:
-        name (str): FAME variable name (may contain $)
-        
-    Returns:
-        str: Python-compatible variable name ($ replaced with _)
-    """
-    return name.replace('$', '_')
-
-def generate_function_name(variable_name):
-    """Generate a Python function name from a FAME variable name.
-    
-    Args:
-        variable_name (str): FAME variable name
-        
-    Returns:
-        str: Capitalized Python function name
-    """
-    converted = convert_variable_name(variable_name)
-    return converted.upper()
-
-def convert_expression_to_polars(expr, refs=None):
-    """Convert a FAME expression to Polars expression syntax.
-    
-    Args:
-        expr (str): FAME expression
-        refs (list): List of variable references in the expression
-        
-    Returns:
-        str: Polars expression string
-    """
-    import re
-    
-    if refs is None:
-        refs = []
-    
-    # Find all variable names (including those with $)
-    variables = re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr)
-    polars_expr = expr
-    
-    # Sort variables by length (descending) to avoid partial replacements
-    variables = sorted(set(variables), key=len, reverse=True)
-    
-    for var in variables:
-        # Skip if it's a number
-        if var.isdigit():
+def _closure_from_roots(adj: Dict[str, List[str]], roots: List[str]) -> Set[str]:
+    seen: Set[str] = set()
+    dq = deque(roots)
+    while dq:
+        n = dq.popleft()
+        if n in seen:
             continue
-            
-        # Escape the variable name for regex and use negative lookbehind/lookahead
-        escaped_var = re.escape(var)
-        pattern = r'(?<![a-zA-Z0-9_$])' + escaped_var + r'(?![a-zA-Z0-9_$])'
-        converted_var = convert_variable_name(var)
-        
-        # If this variable is in refs (function parameters), use it directly
-        # Otherwise, use pl.col()
-        if var in refs:
-            polars_expr = re.sub(pattern, converted_var, polars_expr)
-        else:
-            polars_expr = re.sub(pattern, f'pl.col("{converted_var}")', polars_expr)
-    
-    return polars_expr
+        seen.add(n)
+        for m in adj.get(n, []):
+            dq.append(m)
+    return seen
 
-def generate_formulas_py(parsed_commands=None, input_variables=None):
-    """Generate formulas.py with individual function definitions for each FAME assignment.
-    
-    Args:
-        parsed_commands (list): List of parsed FAME commands
-        input_variables (list): List of input variable names (from external data)
-        
-    Returns:
-        str: Generated Python code
-    """
-    if parsed_commands is None:
-        parsed_commands = []
-    if input_variables is None:
-        input_variables = []
-    
-    script = []
-    script.append('"""')
-    script.append('┌─────────────────────────────────────┐')
-    script.append('│            Fame2PyGen               │')
-    script.append('│         FAME → Python               │')
-    script.append('│     Auto-Generated Formulas        │')
-    script.append('└─────────────────────────────────────┘')
-    script.append('')
-    script.append('This file was automatically generated by Fame2PyGen')
-    script.append('Contains individual formula functions for FAME script conversion')
-    script.append('"""')
-    script.append('import polars as pl')
-    script.append('import ple')
-    script.append('from typing import List, Tuple')
-    script.append('')
-    
-    # Generate individual function definitions for each command
-    for cmd in parsed_commands:
-        if cmd['type'] == 'declaration':
-            # Skip declarations - they don't generate functions
-            continue
-        elif cmd['type'] == 'simple':
-            # Generate function for simple mathematical expression
-            target = cmd['target']
-            expr = cmd['rhs']
-            func_name = generate_function_name(target)
-            converted_target = convert_variable_name(target)
-            
-            # Determine which references are computed variables vs input variables
-            refs = cmd.get('refs', [])
-            computed_refs = [ref for ref in refs if ref not in input_variables]
-            input_refs = [ref for ref in refs if ref in input_variables]
-            
-            has_computed_refs = len(computed_refs) > 0
-            
-            if has_computed_refs:
-                # Function with computed variable parameters - return pl.Series
-                params = ', '.join([f'{convert_variable_name(ref)}: pl.Series' for ref in computed_refs])
-                script.append(f'def {func_name}({params}) -> pl.Series:')
-                script.append('    """')
-                script.append(f'    Computes the values for the {converted_target} time series or variable using Polars expressions.')
-                script.append('    Derived from FAME script(s):')
-                script.append(f'        set {target} = {expr}')
-                script.append('')
-                script.append('    Returns:')
-                script.append('        pl.Series: Polars Series to compute the time series or variable values.')
-                script.append('    """')
-                
-                # Convert expression to Polars syntax with computed refs as parameters
-                polars_expr = convert_expression_to_polars(expr, computed_refs)
-                
-                script.append('    res = (')
-                script.append(f'        {polars_expr}')
-                script.append('    )')
-                script.append('    return res')
-            else:
-                # Function with only input variable references - return pl.Expr with alias
-                script.append(f'def {func_name}() -> pl.Expr:')
-                script.append('    """')
-                script.append(f'    Computes the values for the {converted_target} time series or variable using Polars expressions.')
-                script.append('    Derived from FAME script(s):')
-                script.append(f'        set {target} = {expr}')
-                script.append('')
-                script.append('    Returns:')
-                script.append('        pl.Expr: Polars expression to compute the time series or variable values.')
-                script.append('    """')
-                
-                # Convert expression to Polars syntax using pl.col() for input variables
-                polars_expr = convert_expression_to_polars(expr, [])
-                
-                script.append('    res = (')
-                script.append(f'        {polars_expr}')
-                script.append('    )')
-                script.append(f'    return res.alias("{converted_target}")')
-            
-            script.append('')
-            
-        elif cmd['type'] == 'mchain':
-            # Generate function for mchain expression
-            target = cmd['target']
-            expr = cmd['expr']
-            base_year = cmd['base_year']
-            func_name = generate_function_name(target)
-            converted_target = convert_variable_name(target)
-            
-            refs = cmd.get('refs', [])
-            computed_refs = [ref for ref in refs if ref not in input_variables]
-            
-            if computed_refs:
-                params = ', '.join([f'{convert_variable_name(ref)}: pl.Series' for ref in computed_refs])
-                script.append(f'def {func_name}({params}) -> pl.Series:')
-                script.append('    """')
-                script.append(f'    Computes the values for the {converted_target} time series or variable using Polars expressions.')
-                script.append('    Derived from FAME script(s):')
-                script.append(f'        set {target} = $mchain("{expr}",{base_year})')
-                script.append('')
-                script.append('    Returns:')
-                script.append('        pl.Series: Polars Series to compute the time series or variable values.')
-                script.append('    """')
-                
-                # For mchain, convert the expression and create a simple calculation
-                polars_expr = convert_expression_to_polars(expr, computed_refs)
-                
-                script.append('    res = (')
-                script.append(f'        # TODO: Fix this - placeholder for now')
-                script.append(f'        {polars_expr}')
-                script.append('    )')
-                script.append('    return res')
-                script.append('')
-    
-    # Enhanced generic functions with backward compatibility
-    script.append('# Enhanced generic functions with backward compatibility')
-    script.append('def CONVERT(series: pl.DataFrame = None, as_freq: str = None, to_freq: str = None, technique: str = None, observed: str = None, dependencies: List[str] = None) -> pl.Expr:')
-    script.append('    """Enhanced wrapper for convert with dependency support using \'ple.convert\'.\"\"\"')
-    script.append('    return ple.convert(series=series, as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed, dependencies=dependencies)')
-    script.append('')
-    script.append('def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]] = None, date_col: pl.Expr = None, rebase_year: int = None, vol_list: List[str] = None, price_list: List[str] = None, dependencies: List[str] = None) -> pl.Expr:')
-    script.append('    """Enhanced wrapper for fishvol with dependency support using \'ple.fishvol\'.\"\"\"')
-    script.append('    return ple.fishvol(series_pairs=series_pairs, date_col=date_col, rebase_year=rebase_year, vol_list=vol_list, price_list=price_list, dependencies=dependencies)')
-    script.append('')
-    script.append('def CHAIN(price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]] = None, date_col: pl.Expr = None, index_year: int = None, expression_parts: List[pl.Expr] = None, var_list: List[str] = None, operation: str = "chain") -> pl.Expr:')
-    script.append('    """Enhanced wrapper for chain operations supporting both chain and chainsum using \'ple.chain\'.\"\"\"')
-    script.append('    if isinstance(index_year, str):')
-    script.append('        index_year = int(index_year)')
-    script.append('    return ple.chain(price_quantity_pairs=price_quantity_pairs, date_col=date_col, index_year=index_year, expression_parts=expression_parts, var_list=var_list, operation=operation)')
-    script.append('')
-    script.append('def DECLARE_SERIES(df, name):')
-    script.append('    return pl.lit(None, dtype=pl.Float64).alias(name)')
-    script.append('')
-    
-    return '\n'.join(script)
+def _partition_groups(parsed: List[Dict]):
+    # Identify roots
+    fishvol_roots = [c['target'] for c in parsed if c.get('type') == 'fishvol']
+    convert_nodes = [c for c in parsed if c.get('type') == 'convert']
+    # Group converts by to_freq
+    convert_groups: Dict[str, List[str]] = defaultdict(list)
+    convert_meta: Dict[str, List[Dict]] = defaultdict(list)
+    for c in convert_nodes:
+        to_freq = c['params'][0]  # 'm','q','a'
+        convert_groups[to_freq].append(c['target'])
+        convert_meta[to_freq].append(c)
 
-def generate_convpy4rmfame_py(parsed_commands, alias_dict, levels):
-    script = []
-    script.append('"""')
-    script.append('┌─────────────────────────────────────┐')
-    script.append('│            Fame2PyGen               │')
-    script.append('│         FAME → Python               │')
-    script.append('│    Auto-Generated Pipeline         │')
-    script.append('└─────────────────────────────────────┘')
-    script.append('')
-    script.append('This file was automatically generated by Fame2PyGen')
-    script.append('Contains the conversion pipeline from FAME script to Python')
-    script.append('"""')
-    script.append("import polars as pl")
-    script.append("from formulas import *")
-    # Find all input/source columns
-    all_targets = set()
-    all_refs = set()
-    for c in parsed_commands:
-        if c['type'] == 'declaration':
-            all_targets.update(c['targets'])
-        elif 'target' in c:
-            all_targets.add(c['target'])
-        for ref in c.get('refs', []):
-            all_refs.add(ref)
-    input_vars = sorted(list(all_refs - all_targets))
-    script.append("df = pl.DataFrame({")
-    script.append("    'date': pl.date_range(pl.date(2019, 1, 1), pl.date(2025, 1, 1), '1mo', eager=True),")
-    for col in input_vars:
-        if col == 'date': continue
-        script.append(f"    '{col}': pl.Series('{col}', range(1, 74)),")
-    script.append("})")
-    for alias, items in alias_dict.items():
-        script.append(f"{alias} = {items}")
-    script.append("# ---- DECLARE SERIES ----")
-    for lvl, targets in enumerate(levels):
-        cmds = [c for c in parsed_commands if (c.get('target') in targets) or (c['type'] == 'declaration' and set(c['targets']).intersection(targets))]
-        for c in cmds:
-            if c['type'] == 'declaration':
-                for t in c['targets']:
-                    script.append(f"# Declare series: {t}")
-                    script.append(f"df = df.with_columns([DECLARE_SERIES(df, '{t}')])")
-    script.append("# ---- COMPUTATIONS ----")
-    for lvl, targets in enumerate(levels):
-        cmds = [c for c in parsed_commands if (c.get('target') in targets)]
-        for c in cmds:
-            if c['type'] == 'fishvol_enhanced':
-                # Enhanced fishvol with dependencies
-                vols = c['refs'][0]
-                prices = c['refs'][1]
-                dependencies = c.get('dependencies', [])
-                script.append(f"# Enhanced fishvol function: {c['target']} = fishvol_enhanced({vols}, {prices}, year={c['year']}, deps={dependencies})")
-                if dependencies:
-                    script.append(f"# Dependencies: {dependencies} must be computed first")
-                script.append(f"df = df.with_columns([FISHVOL(['{vols}'], ['{prices}'], pl.col('date'), {c['year']}, {dependencies}).alias('{c['target']}')])")
-            elif c['type'] == 'fishvol_list':
-                vols = alias_dict.get(c['refs'][0], [c['refs'][0]])
-                prices = alias_dict.get(c['refs'][1], [c['refs'][1]])
-                script.append(f"# fishvol function: {c['target']} = fishvol({vols}, {prices}, year={c['year']})")
-                script.append(f"df = df.with_columns([FISHVOL(df, {vols}, {prices}, year={c['year']}).alias('{c['target']}')])")
-            elif c['type'] == 'convert_enhanced':
-                # Enhanced convert with dependencies
-                source = c['refs'][0]
-                freq, method, period = c['params']
-                dependencies = c.get('dependencies', [])
-                script.append(f"# Enhanced convert function: {c['target']} = convert_enhanced({source}, {freq}, {method}, {period}, deps={dependencies})")
-                if dependencies:
-                    script.append(f"# Dependencies: {dependencies} must be computed first")
-                script.append(f"df = df.with_columns([CONVERT(df, '{source}', '{freq}', '{method}', '{period}', dependencies={dependencies}).alias('{c['target']}')])")
-            elif c['type'] == 'convert':
-                freq, method, period = c['params']
-                source = c['refs'][0]
-                script.append(f"# convert function: {c['target']} = convert({source}, {freq}, {method}, {period})")
-                script.append(f"df = df.with_columns([CONVERT(df, '{source}', '{freq}', '{method}', '{period}').alias('{c['target']}')])")
-            elif c['type'] == 'mchain_enhanced':
-                # Enhanced mchain for chainsum operations
-                refs = c['refs']
-                operation = c.get('operation', 'chain')
-                base_year = c['base_year']
-                var_list = c.get('var_list', [])
-                script.append(f"# Enhanced {operation} function: {c['target']} = {operation}({refs}, base_year={base_year}, vars={var_list})")
-                
-                if operation == 'chainsum':
-                    # Create expression parts for chainsum using enhanced CHAIN function
-                    expr_parts = [f"pl.col('{ref}')" for ref in refs]
-                    expr_parts_str = '[' + ', '.join(expr_parts) + ']'
-                    script.append(f"df = df.with_columns([CHAIN(expression_parts={expr_parts_str}, date_col=pl.col('date'), index_year={base_year}, var_list={var_list}, operation='chainsum').alias('{c['target']}')])")
-                else:
-                    # Traditional chain functionality
-                    pair_exprs = []
-                    for i in range(0, len(refs), 2):
-                        if i + 1 < len(refs):
-                            pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i+1]}'))")
-                        else:
-                            pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i]}'))")
-                    pairs_str = '[' + ', '.join(pair_exprs) + ']'
-                    script.append(f"df = df.with_columns([CHAIN(price_quantity_pairs={pairs_str}, date_col=pl.col('date'), index_year={base_year}, operation='chain').alias('{c['target']}')])")
-            elif c['type'] == 'mchain':
-                refs = c['refs']
-                base_year = c['base_year']
-                operation = c.get('operation', 'chain')
-                script.append(f"# mchain function: {c['target']} = chain({refs}, base_year={base_year})")
-                # Convert refs list to pairs format for CHAIN function
-                pair_exprs = []
-                for i in range(0, len(refs), 2):
-                    if i + 1 < len(refs):
-                        pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i+1]}'))")
-                    else:
-                        # If odd number, pair with itself or skip
-                        pair_exprs.append(f"(pl.col('{refs[i]}'), pl.col('{refs[i]}'))")
-                pairs_str = '[' + ', '.join(pair_exprs) + ']'
-                script.append(f"df = df.with_columns([CHAIN(price_quantity_pairs={pairs_str}, date_col=pl.col('date'), index_year={base_year}, operation='chain').alias('{c['target']}')])")
-            elif c['type'] == 'pct':
-                source = c['refs'][0]
-                lag = c['params'][0]
-                script.append(f"# Using with_columns for pct function")
-                script.append(f"df = df.with_columns([ple.pct(pl.col('{source}'), lag={lag}).alias('{c['target']}')])")
-            elif c['type'] == 'interp':
-                source = c['refs'][0]
-                method = c['params'][0]
-                script.append(f"# Using with_columns for interp function")
-                script.append(f"df = df.with_columns([ple.interp(pl.col('{source}'), method='{method}').alias('{c['target']}')])")
-            elif c['type'] == 'overlay':
-                source1, source2 = c['refs']
-                script.append(f"# Using with_columns for overlay function")
-                script.append(f"df = df.with_columns([ple.overlay(pl.col('{source1}'), pl.col('{source2}')).alias('{c['target']}')])")
-            elif c['type'] == 'mave':
-                source = c['refs'][0]
-                window = c['params'][0]
-                script.append(f"# Using with_columns for mave function")
-                script.append(f"df = df.with_columns([ple.mave(pl.col('{source}'), window={window}).alias('{c['target']}')])")
-            elif c['type'] == 'mavec':
-                source = c['refs'][0]
-                window = c['params'][0]
-                script.append(f"# Using with_columns for mavec function")
-                script.append(f"df = df.with_columns([ple.mavec(pl.col('{source}'), window={window}).alias('{c['target']}')])")
-            elif c['type'] == 'copy':
-                source = c['refs'][0]
-                script.append(f"# Using with_columns for copy function")
-                script.append(f"df = df.with_columns([ple.copy(pl.col('{source}')).alias('{c['target']}')])")
-            elif c['type'] == 'simple':
-                # Generate proper Polars expression for mathematical operations
-                expr = c['rhs']
-                target = c['target']
-                
-                # Check if this is a simple expression that can use function calls
-                if should_use_function_call(target, expr):
-                    # Use function call approach
-                    func_name = variable_to_function_name(target)
-                    script.append(f"# Mathematical expression: {target} = {expr}")
-                    script.append(f"df = df.with_columns([{func_name}().alias('{target}')])")
-                else:
-                    # Use traditional polars expression approach for complex expressions
-                    import re
-                    # Find all variable names, including those with $ (must start with letter)
-                    variables = re.findall(r'[a-zA-Z][a-zA-Z0-9_$]*', expr)
-                    polars_expr = expr
-                    
-                    # Sort variables by length (descending) to avoid partial replacements
-                    variables = sorted(set(variables), key=len, reverse=True)
-                    
-                    for var in variables:
-                        # Escape the variable name for regex and use negative lookbehind/lookahead
-                        # to ensure we don't replace parts of other variable names
-                        escaped_var = re.escape(var)
-                        pattern = r'(?<![a-zA-Z0-9_$])' + escaped_var + r'(?![a-zA-Z0-9_$])'
-                        polars_expr = re.sub(pattern, f'pl.col("{var}")', polars_expr)
-                    
-                    script.append(f"# Mathematical expression: {target} = {expr}")
-                    script.append(f"df = df.with_columns([({polars_expr}).alias('{target}')])")
-    script.append("print('Computation finished')")
-    return '\n'.join(script)
+    adj, indeg = _build_graph(parsed)
+    fishvol_closures: Dict[str, Set[str]] = {}
+    for fr in fishvol_roots:
+        fishvol_closures[fr] = _closure_from_roots(adj, [fr])
 
-if __name__ == '__main__':
-    # Display branding banner
-    print("┌─────────────────────────────────────┐")
-    print("│            Fame2PyGen               │")
-    print("│         FAME → Python               │")
-    print("│      Code Generator v1.0            │")
-    print("└─────────────────────────────────────┘")
-    print("")
-    
-    fame_script = '''
-# Basic arithmetic operations
-a$=v123*12
-a=v143*12
-b=v143*2
-b$=v123*6
-c$=v123*5
-d=v123*1
-e=v123*2
-f=v123*3
-g=v123*4
-h=v123*5
+    # Allocate nodes to groups
+    group_for_node: Dict[str, str] = {}
+    for fr, nodes in fishvol_closures.items():
+        for n in nodes:
+            group_for_node[n] = f'fishvol::{fr}'
+    for to_freq, nodes in convert_groups.items():
+        for n in _closure_from_roots(adj, nodes):
+            # do not override fishvol allocation; fishvol takes precedence
+            group_for_node.setdefault(n, f'convert::{to_freq}')
 
-# Price components  
-pa$=v123*3
-pa=v143*4
-pb=v143*1
-pb$=v123*1
-pc$=v123*2
-pd=v123*3
-pe=v123*4
-pf=v123*5
-pg=v123*1
-ph=v123*2
+    # Main group: all remaining targets
+    all_targets = _collect_targets(parsed)
+    main_nodes = sorted([t for t in all_targets if t not in group_for_node])
+    return group_for_node, fishvol_roots, fishvol_closures, convert_meta, main_nodes, adj
 
-# Derived calculations
-aa=a$/a
-bb=aa+a
-paa=pa$/pa
-pbb=pa+paa
-hxz = (b*12)/a
-abc$_d1=a$+b$+c$+a
+def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
+    # Partition graph
+    group_for_node, fishvol_roots, fishvol_closures, convert_meta, main_nodes, adj = _partition_groups(parsed_cmds)
 
-# Traditional chain operations
-c1 = $mchain("a + b + c$ + d + e + f + g + h",2017)
+    # Sort nodes by levels for deterministic emission
+    adj_all, indeg_all = _build_graph(parsed_cmds)
+    levels = _topo_levels(adj_all, indeg_all)
 
-# ENHANCED: Chain sum with variable list (uses enhanced CHAIN function)
-chain_total = $chainsum("a + b + c$", 2017, ["a", "b", "c$"])
+    def nodes_in_levels(filter_set: Set[str]) -> List[List[str]]:
+        out: List[List[str]] = []
+        for lvl in levels:
+            picked = [n for n in lvl if n in filter_set]
+            if picked:
+                out.append(picked)
+        return out
 
-# ENHANCED: fishvol with dependencies (uses enhanced FISHVOL function)  
-vol_index = fishvol_rebase(volumes, prices, 2020, deps=["a", "b"])
+    code = []
+    code.append('import polars as pl')
+    code.append('from formulas import *')
+    code.append('import ple')
+    code.append('')
+    code.append("# Base DataFrame (unfiltered)")
+    code.append("df = pl.DataFrame({")
+    code.append("    'date': pl.date_range(pl.date(2019, 1, 1), pl.date(2025, 1, 1), '1mo', eager=True),")
+    code.append("    'v123': pl.Series('v123', range(1, 74)),")
+    code.append("    'v143': pl.Series('v143', range(1, 74)),")
+    code.append("    'prices': pl.Series('prices', range(1, 74)),")
+    code.append("    'volumes': pl.Series('volumes', range(1, 74)),")
+    code.append("})")
+    code.append("")
+    # MAIN PIPELINE
+    if main_nodes:
+        code.append("# ---- MAIN PIPELINE (no date filtering) ----")
+        for idx, lvl in enumerate(nodes_in_levels(set(main_nodes))):
+            code.append(f"# --- Level {idx+1}: {', '.join(lvl)}")
+            cols = []
+            for t in lvl:
+                fn = variable_to_function_name(t)
+                # formulas functions are zero-arg; alias back to target name
+                cols.append(f"{fn}().alias('{t}')")
+            code.append("df = df.with_columns([")
+            code.append("    " + ",\n    ".join(cols))
+            code.append("])")
+            code.append("")
+    # FISHVOL PIPELINES
+    for fr in fishvol_roots:
+        closure = fishvol_closures[fr]
+        fr_year = None
+        for c in parsed_cmds:
+            if c.get('type') == 'fishvol' and c.get('target') == fr:
+                fr_year = int(c['year'])
+                break
+        year_guard = fr_year or 1900
+        code.append(f"# ---- FISHVOL SUB-PIPELINE for root '{fr}' (filtered from {year_guard}-01-01) ----")
+        code.append(f"df_fv_{fr} = df.filter(pl.col('date') >= pl.date({year_guard}, 1, 1))")
+        for idx, lvl in enumerate(nodes_in_levels(set(closure))):
+            code.append(f"# --- FV Level {idx+1}: {', '.join(lvl)}")
+            cols = []
+            for t in lvl:
+                fn = variable_to_function_name(t)
+                cols.append(f"{fn}().alias('{t}')")
+            code.append(f"df_fv_{fr} = df_fv_{fr}.with_columns([")
+            code.append("    " + ",\n    ".join(cols))
+            code.append("])")
+            code.append("")
+    # CONVERT PIPELINES
+    for to_freq, metas in convert_meta.items():
+        code.append(f"# ---- CONVERT SUB-PIPELINE to '{to_freq}' ----")
+        # We build per-target select, then concat columns
+        code.append(f"df_cv_{to_freq} = None")
+        for meta in metas:
+            tgt = meta['target']
+            src = meta['refs'][0]
+            every = {'m': '1mo', 'q': '1q', 'a': '1y'}.get(to_freq, to_freq)
+            # Demonstration using group_by_dynamic; replace with ple.convert if needed
+            code.append(f"_cv_tmp = (df.select(['date', '{src}'])"
+                        f".group_by_dynamic('date', every='{every}')"
+                        f".agg(pl.col('{src}').mean().alias('{tgt}')))")
+            code.append(f"df_cv_{to_freq} = _cv_tmp if df_cv_{to_freq} is None else df_cv_{to_freq}.join(_cv_tmp, on='date', how='full').select(pl.all().unique())")
+        code.append("")
 
-# ENHANCED: convert with dependencies (uses enhanced CONVERT function)
-quarterly_data = convert(monthly_series, q, average, end, deps=["c$"])
-'''
-    parsed, alias_dict = preprocess_commands(fame_script)
-    levels = get_computation_levels(parsed)
-    
-    # Calculate input variables (those referenced but not computed)
-    all_targets = set()
-    all_refs = set()
-    for c in parsed:
-        if c['type'] == 'declaration':
-            all_targets.update(c['targets'])
-        elif 'target' in c:
-            all_targets.add(c['target'])
-        for ref in c.get('refs', []):
-            all_refs.add(ref)
-    input_vars = sorted(list(all_refs - all_targets))
-    
-    formulas_py = generate_formulas_py(parsed, input_vars)
-    with open("formulas.py", "w", encoding="utf-8") as f:
-        f.write(formulas_py)
-    convpy4rmfame_py = generate_convpy4rmfame_py(parsed, alias_dict, levels)
-    with open("convpy4rmfame.py", "w", encoding="utf-8") as f:
-        f.write(convpy4rmfame_py)
-    print("✓ formulas.py and convpy4rmfame.py have been generated.")
-    print("✓ Fame2PyGen conversion completed successfully!")
+    # FINAL MELT + UNION
+    # Collect columns for each frame
+    main_cols = [t for t in main_nodes]
+    code.append("# ---- FINAL MELT AND UNION ----")
+    if main_cols:
+        code.append(f"main_long = df.select(['date'{''.join([', ' + repr(c) for c in main_cols])}]).melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE')")
+    else:
+        code.append("main_long = pl.DataFrame({'date': [], 'TIME_SERIES_NAME': [], 'VALUE': []})")
+    fv_names = []
+    for fr in fishvol_roots:
+        fv_names.append(f"fv_long_{fr}")
+        code.append(f"fv_long_{fr} = df_fv_{fr}.select(pl.all().exclude(['v123','v143','prices','volumes']))"
+                    f".melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE')")
+    cv_names = []
+    for to_freq in convert_meta.keys():
+        cv_names.append(f"cv_long_{to_freq}")
+        code.append(f"cv_long_{to_freq} = (df_cv_{to_freq} if df_cv_{to_freq} is not None else pl.DataFrame({'{'}'date':[]{'}'}))")
+        code.append(f"cv_long_{to_freq} = cv_long_{to_freq}.melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE') if df_cv_{to_freq} is not None else cv_long_{to_freq}")
+    concat_sources = ['main_long'] + fv_names + cv_names
+    code.append(f"final_long = pl.concat([{', '.join(concat_sources)}], how='vertical_relaxed')")
+    code.append("print(final_long)")
+    return '\n'.join(code)
+
+def generate_from_script(fame_script: str) -> str:
+    parsed, _aliases = preprocess_commands(fame_script)
+    return generate_pipeline_code(parsed)
