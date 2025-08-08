@@ -4,98 +4,62 @@
 
 # Fame2PyGen
 
-Fame2PyGen is a toolset for automatically converting FAME-style formula scripts into executable, modular Python code using [Polars](https://pola.rs/) for DataFrame operations. It supports generic data transformation functions, auto-generated pipelines, and a mock FAME-style backend via `ple.py`.
+Fame2PyGen converts FAME-style formula scripts into modular Python using [Polars](https://pola.rs/). It generates:
+- formulas.py: per-variable functions returning Polars expressions (pl.Expr)
+- convpy4rmfame.py: an execution pipeline using with_columns()
+- ple.py: mock/enhanced backend functions (CHAIN/FISHVOL/CONVERT)
 
-## 🎨 Logo Options
+Key behaviors:
+- CHAIN is a consolidated operation that takes a list of (price_expr, quantity_expr) tuples (no separate CHAINSUM).
+- FISHVOL sub-pipelines: once a FISHVOL appears, all computations that depend on it are executed in their own DataFrame filtered to DATE >= Jan 1 of the FISHVOL base year. The main DataFrame remains unfiltered.
+- CONVERT sub-pipelines: quarterly or annual conversions and any dependents are executed in separate DataFrames to avoid altering the main DataFrame. 
+- Final output: each sub-pipeline is melted to long format and then vertically concatenated.
 
-We've created three logo concepts for the project:
-- Text-based Logo: Clean, professional text design
-- ASCII Art Logo: Visual representation with transformation arrows
-- Modern Tech Logo: Contemporary graphical concept
-
-See the `/logos` directory for complete designs and usage guidelines.
-
-## ✨ Enhanced Existing Functions
-
-### CHAIN Function (consolidated)
-- chain(): Chain-linked operations over several (price, quantity) tuple pairs
-- Input: list of (price_expr, quantity_expr) tuples
-- Note: There is no separate CHAINSUM function; summation across pairs is handled within `chain()` by summing price*quantity components.
-
-### FISHVOL Function
-- fishvol_rebase(): Fisher volume operations (mock/enhanced placeholder in `ple.py`)
-- Optional variable lists and explicit dependency lists supported at the pipeline level for ordering
-
-### CONVERT Function
-- convert(): Frequency conversion (mock implementation; production behavior to be specified)
-- Optional dependency parameters can be used for pipeline-level ordering
-
-## Project Structure
-
-```
-fame2pygen/
-├── README.md
-├── logos/                    # Logo designs and documentation
-├── ple.py                    # Mock/enhanced backend functions (CHAIN/FISHVOL/CONVERT)
-├── polars_econ_mock.py       # Mock FAME function implementations
-├── formulagen.py             # Parsers for FAME-like scripts
-├── write_formulagen.py       # Main generator using the parser
-├── formulas.py               # Auto-generated: expression-based calculation functions
-├── convpy4rmfame.py          # Auto-generated: computation pipeline
-├── test_enhancements.py      # Test suite for branding and function presence
-└── ...
-```
-
-### Expression-Based Formula Generation
-- Functions return `pl.Expr` objects with proper aliasing
-- Support for both expression and series-based operations
-- Comprehensive docstring generation with FAME script derivation
-- Type-safe function signatures
-
-### Layered Computation Pipeline
-- Structured computation using `with_columns()` approach
-- Level-based dependency management (pipeline ordering)
-- Frequency conversion handling (mock)
-- Final output formatting with unpivot and column renaming (as needed)
-
-### Extended FAME Function Support
-- COPY: Series duplication
-- PCT: Percentage change calculations with configurable lags
-- INTERP: Linear and advanced interpolation methods
-- OVERLAY: Series combination with null-filling
-- MAVE: Moving averages with configurable windows
-- MAVEC: Centered moving averages
-- FISHVOL: Fisher volume index calculations
-- CHAIN: Chain-linked index computations over multiple (price, quantity) pairs
-
-## Quickstart: Using CHAIN
-
-Below is a minimal example demonstrating how to use the consolidated `CHAIN` function over multiple (price, quantity) pairs:
+## Quickstart: CHAIN and Sub-Pipelines
 
 ```python
 import polars as pl
-import ple  # Fame2PyGen backend functions
+import ple
 
-# Sample input
+# Base frame (unfiltered)
 df = pl.DataFrame({
     'date': pl.date_range(pl.date(2022, 1, 1), pl.date(2022, 12, 1), '1mo', eager=True),
-    'prices_a': pl.Series(range(1, 12 + 1)),
-    'quantities_a': pl.Series(range(10, 10 + 12)),
-    'prices_b': pl.Series(range(2, 2 + 12)),
-    'quantities_b': pl.Series(range(5, 5 + 12)),
+    'prices_a': range(1, 13),
+    'quantities_a': range(10, 22),
+    'prices_b': range(2, 14),
+    'quantities_b': range(5, 17),
 })
 
-# Build a chain-linked composite value across multiple pairs
-chain_expr = ple.chain([
-    (pl.col('prices_a'), pl.col('quantities_a')),
-    (pl.col('prices_b'), pl.col('quantities_b')),
-], date_col=pl.col('date'))  # date_col is optional in the mock placeholder
+# Main pipeline computations stay on df (no date filtering)
+df = df.with_columns([
+    (pl.col('quantities_a') * 2).alias('A'),
+    (pl.col('quantities_b') + 3).alias('B'),
+    ple.chain([
+        (pl.col('prices_a'), pl.col('quantities_a')),
+        (pl.col('prices_b'), pl.col('quantities_b')),
+    ], date_col=pl.col('date')).alias('CHAIN_MAIN'),
+])
 
-df = df.with_columns(chain_expr.alias('chain_value'))
+# FISHVOL sub-pipeline: filter by base year start (e.g., 2020-01-01)
+fishvol_df = df.filter(pl.col('date') >= pl.date(2020, 1, 1)).with_columns([
+    ple.fishvol(series_pairs=[
+        (pl.col('quantities_a'), pl.col('prices_a')),
+        (pl.col('quantities_b'), pl.col('prices_b')),
+    ], date_col=pl.col('date'), rebase_year=2020).alias('FISHVOL_IDX'),
+])
 
-print(df.select('date', 'chain_value'))
+# CONVERT sub-pipeline: quarterly; keep separate
+convert_q_df = df.select(['date', 'A']).group_by_dynamic('date', every='1q').agg(pl.col('A').mean().alias('A_Q'))
+
+# Melt and union at the end
+main_long = df.select(['date', 'A', 'B', 'CHAIN_MAIN']).melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE')
+fishvol_long = fishvol_df.select(['date', 'FISHVOL_IDX']).melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE')
+convert_long = convert_q_df.melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE')
+
+final = pl.concat([main_long, fishvol_long, convert_long], how='vertical_relaxed')
+print(final)
 ```
 
 Notes:
-- In this mock/enhanced placeholder, `chain()` computes a sum of products (price * quantity) across all pairs, per row.
-- If you require base-year indexing or temporal chaining, you can extend `ple.chain()` or implement rebasing logic at the pipeline level.
+- The generator handles these sub-pipelines automatically based on the script (FISHVOL or CONVERT nodes and their dependency closures).
+- If you need true chaining/rebasing logic, you can extend ple.chain and ple.fishvol accordingly.
