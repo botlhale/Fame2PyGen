@@ -5,16 +5,16 @@
 │      Polars Econ Extensions               │
 └───────────────────────────────────────────┘
 """
-from typing import List, Tuple
 import polars as pl
+from typing import List, Tuple, Optional
 
 def fishvol(
-    series_pairs: List[Tuple[pl.Expr, pl.Expr]] | None = None,
-    date_col: pl.Expr | None = None,
-    rebase_year: int | None = None,
-    vol_list: List[str] | None = None,
-    price_list: List[str] | None = None,
-    dependencies: List[str] | None = None,
+    series_pairs: Optional[List[Tuple[pl.Expr, pl.Expr]]] = None,
+    date_col: Optional[pl.Expr] = None,
+    rebase_year: Optional[int] = None,
+    vol_list: Optional[List[str]] = None,
+    price_list: Optional[List[str]] = None,
+    dependencies: Optional[List[str]] = None,
 ) -> pl.Expr:
     """
     Fisher volume index calculation (mock/enhanced placeholder).
@@ -50,13 +50,13 @@ def fishvol(
 
 def chain(
     price_quantity_pairs: List[Tuple[pl.Expr, pl.Expr]],
-    date_col: pl.Expr | None = None,
+    date_col: Optional[pl.Expr] = None,
 ) -> pl.Expr:
     """
     Chain-linked operation over multiple (price, quantity) pairs.
 
     This consolidated CHAIN operation accepts a list of tuples and combines
-    them by summing the price * quantity components. If you need base-year
+    them by summing the price * quantity components row-wise. If you need base-year
     rebasing or temporal chaining, implement that at the pipeline level or
     extend this function accordingly.
 
@@ -74,17 +74,17 @@ def chain(
 
 
 def convert(
-    series: pl.DataFrame | pl.LazyFrame | None = None,
-    date_col: str | None = None,
-    as_freq: str | None = None,
-    to_freq: str | None = None,
-    technique: str | None = None,
-    observed: str | None = None,
-    source_var: str | None = None,
-    freq: str | None = None,
-    method: str | None = None,
-    period: str | None = None,
-    dependencies: List[str] | None = None,
+    series: Optional[pl.DataFrame] = None,
+    date_col: Optional[str] = None,
+    as_freq: Optional[str] = None,
+    to_freq: Optional[str] = None,
+    technique: Optional[str] = None,
+    observed: Optional[str] = None,
+    source_var: Optional[str] = None,
+    freq: Optional[str] = None,
+    method: Optional[str] = None,
+    period: Optional[str] = None,
+    dependencies: Optional[List[str]] = None,
 ):
     """
     Frequency conversion (mock placeholder).
