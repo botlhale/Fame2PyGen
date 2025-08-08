@@ -7,17 +7,29 @@
 """
 import re
 from collections import defaultdict, deque
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Optional
 
-import polars as pl
+import polars as pl  # only used in generated code strings
 import formulagen
 
+
 def variable_to_function_name(var: str) -> str:
+    """
+    Convert a variable name to a valid Python function name for formulas.py.
+    - 'a'   -> 'A'
+    - 'a$'  -> 'A_'
+    - 'pa$' -> 'PA_'
+    """
     if var.endswith('$'):
         return var[:-1].upper() + '_'
     return var.upper()
 
+
 def preprocess_commands(fame_script: str):
+    """
+    Expand alias definitions and simple 'loop ... end loop' constructs into flat commands,
+    then parse them into structured commands via formulagen.
+    """
     lines = fame_script.strip().split('\n')
     alias_dict: Dict[str, List[str]] = {}
     expanded_lines: List[str] = []
@@ -61,7 +73,7 @@ def preprocess_commands(fame_script: str):
             while i < len(expanded_lines) and not expanded_lines[i].startswith('end loop'):
                 block.append(expanded_lines[i])
                 i += 1
-            # Expand loop bodies
+            # Expand loop bodies with alias items
             for item in alias_dict.get(alias, []):
                 for b in block:
                     final_cmds.append(b.replace(varname, item))
@@ -73,8 +85,10 @@ def preprocess_commands(fame_script: str):
     parsed = [formulagen.parse_command(cmd) for cmd in final_cmds if formulagen.parse_command(cmd)]
     return parsed, alias_dict
 
+
 def _collect_targets(parsed_commands: List[Dict]) -> Set[str]:
     return {c['target'] for c in parsed_commands if c and 'target' in c}
+
 
 def _build_graph(parsed_commands: List[Dict]):
     targets = _collect_targets(parsed_commands)
@@ -91,6 +105,7 @@ def _build_graph(parsed_commands: List[Dict]):
                 adj[ref].append(tgt)
                 indeg[tgt] += 1
     return adj, indeg
+
 
 def _topo_levels(adj: Dict[str, List[str]], indeg: Dict[str, int]) -> List[List[str]]:
     q = deque([n for n, d in indeg.items() if d == 0])
@@ -112,6 +127,7 @@ def _topo_levels(adj: Dict[str, List[str]], indeg: Dict[str, int]) -> List[List[
         raise ValueError(f"Cycle detected among nodes: {cycl}")
     return levels
 
+
 def _closure_from_roots(adj: Dict[str, List[str]], roots: List[str]) -> Set[str]:
     seen: Set[str] = set()
     dq = deque(roots)
@@ -124,15 +140,29 @@ def _closure_from_roots(adj: Dict[str, List[str]], roots: List[str]) -> Set[str]
             dq.append(m)
     return seen
 
-def _partition_groups(parsed: List[Dict]):
-    # Identify roots
+
+def partition_groups(parsed: List[Dict]):
+    """
+    Partition the dependency graph into:
+      - main group: everything not dominated by fishvol or convert roots
+      - per-FISHVOL groups: closure starting at each fishvol root
+      - per-CONVERT groups: closure of each convert target, grouped by to_freq
+
+    Returns:
+      group_for_node: mapping target -> group label ('fishvol::<root>' or 'convert::<to_freq>')
+      fishvol_roots: list of fishvol target names
+      fishvol_closures: mapping fishvol root -> set of nodes in its closure
+      convert_meta: mapping to_freq ('m','q','a') -> list of convert nodes (dicts)
+      main_nodes: list of targets in main group
+      adj: adjacency list of dependency graph
+    """
     fishvol_roots = [c['target'] for c in parsed if c.get('type') == 'fishvol']
     convert_nodes = [c for c in parsed if c.get('type') == 'convert']
-    # Group converts by to_freq
+
     convert_groups: Dict[str, List[str]] = defaultdict(list)
     convert_meta: Dict[str, List[Dict]] = defaultdict(list)
     for c in convert_nodes:
-        to_freq = c['params'][0]  # 'm','q','a'
+        to_freq = c['params'][0].lower()  # 'm','q','a'
         convert_groups[to_freq].append(c['target'])
         convert_meta[to_freq].append(c)
 
@@ -141,36 +171,156 @@ def _partition_groups(parsed: List[Dict]):
     for fr in fishvol_roots:
         fishvol_closures[fr] = _closure_from_roots(adj, [fr])
 
-    # Allocate nodes to groups
     group_for_node: Dict[str, str] = {}
     for fr, nodes in fishvol_closures.items():
         for n in nodes:
             group_for_node[n] = f'fishvol::{fr}'
     for to_freq, nodes in convert_groups.items():
         for n in _closure_from_roots(adj, nodes):
-            # do not override fishvol allocation; fishvol takes precedence
             group_for_node.setdefault(n, f'convert::{to_freq}')
 
-    # Main group: all remaining targets
     all_targets = _collect_targets(parsed)
     main_nodes = sorted([t for t in all_targets if t not in group_for_node])
     return group_for_node, fishvol_roots, fishvol_closures, convert_meta, main_nodes, adj
 
-def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
-    # Partition graph
-    group_for_node, fishvol_roots, fishvol_closures, convert_meta, main_nodes, adj = _partition_groups(parsed_cmds)
 
-    # Sort nodes by levels for deterministic emission
+def _nodes_in_levels(levels: List[List[str]], filter_set: Set[str]) -> List[List[str]]:
+    out: List[List[str]] = []
+    for lvl in levels:
+        picked = [n for n in lvl if n in filter_set]
+        if picked:
+            out.append(picked)
+    return out
+
+
+def generate_formulas_py_string(parsed_cmds: List[Dict]) -> str:
+    """
+    Generate formulas.py source as a string.
+    - Functions return unaliased pl.Expr.
+    - Function names match sanitized target names (variable_to_function_name).
+    - References inside expressions use the original target column names (e.g., 'a$', 'a').
+    """
+    header = [
+        '"""',
+        '┌───────────────────────────────────────────┐',
+        '│            Fame2PyGen                     │',
+        '│         FAME → Python                     │',
+        '│     Auto-Generated Formulas              │',
+        '└───────────────────────────────────────────┘',
+        '',
+        'This file was automatically generated by Fame2PyGen',
+        'Contains individual formula functions for FAME script conversion',
+        '"""',
+        'import polars as pl',
+        'from typing import List, Tuple',
+        '',
+    ]
+    bodies: List[str] = []
+
+    def expr_to_polars(expr: str, refs: List[str]) -> str:
+        # Replace refs with pl.col("ref") using original ref token (case/punctuation preserved)
+        expr_py = expr
+        # Sort by length desc to avoid partial replacements
+        for r in sorted(set(refs), key=len, reverse=True):
+            expr_py = re.sub(rf'\\b{re.escape(r)}\\b', f'pl.col("{r}")', expr_py)
+        return expr_py
+
+    for cmd in parsed_cmds:
+        if not cmd or 'target' not in cmd:
+            continue
+        target = cmd['target']
+        fn_name = variable_to_function_name(target)
+        if cmd['type'] == 'simple':
+            expr_py = expr_to_polars(cmd['expr'], cmd.get('refs', []))
+            body = [
+                f"def {fn_name}() -> pl.Expr:",
+                '    """',
+                f"    Compute Polars expression for target '{target}'.",
+                '    """',
+                f"    return ({expr_py})",
+                '',
+            ]
+            bodies.extend(body)
+        elif cmd['type'] == 'mchain':
+            # Build price-quantity tuples based on naming convention p<var> for prices (example heuristic)
+            pairs = []
+            for op, var in cmd.get('terms', []):
+                # '+' or '-' op can be encoded by multiplying quantity by +1/-1
+                sign = '-' if op == '-' else '+'
+                q = f"(pl.col('{var}'))"
+                p = f"(pl.col('p{var}'))"  # heuristic for price series name; adjust as needed
+                if sign == '-':
+                    q = f"(-1 * {q})"
+                pairs.append(f"({p}, {q})")
+            pairs_str = ", ".join(pairs) if pairs else ""
+            body = [
+                f"def {fn_name}() -> pl.Expr:",
+                '    """',
+                f"    CHAIN over multiple (price, quantity) pairs for '{target}'.",
+                '    """',
+                f"    return ple.chain([ {pairs_str} ], date_col=pl.col('date'))",
+                '',
+            ]
+            bodies.extend(body)
+        elif cmd['type'] == 'fishvol':
+            # pairs based on refs order: (quantity, price)
+            v, p = cmd['refs'][0], cmd['refs'][1]
+            base_year = int(cmd['year'])
+            trailing = cmd.get('trailing_op', '')
+            inner = f"ple.fishvol(series_pairs=[(pl.col('{v}'), pl.col('{p}'))], date_col=pl.col('date'), rebase_year={base_year})"
+            expr = f"({inner}{trailing})" if trailing else inner
+            body = [
+                f"def {fn_name}() -> pl.Expr:",
+                '    """',
+                f"    FISHVOL expression for '{target}'.",
+                '    """',
+                f"    return {expr}",
+                '',
+            ]
+            bodies.extend(body)
+        elif cmd['type'] == 'convert':
+            src = cmd['refs'][0]
+            to_freq, technique, observed = cmd['params']
+            # This returns a placeholder; real conversion occurs in pipeline subframes
+            body = [
+                f"def {fn_name}() -> pl.Expr:",
+                '    """',
+                f"    Placeholder expression for convert target '{target}'.",
+                '    """',
+                f"    return pl.col('{src}')",
+                '',
+            ]
+            bodies.extend(body)
+        else:
+            # Default: no-op expression referencing target if needed
+            body = [
+                f"def {fn_name}() -> pl.Expr:",
+                '    """',
+                f"    Default placeholder for '{target}'.",
+                '    """',
+                f"    return pl.col('{target}')",
+                '',
+            ]
+            bodies.extend(body)
+
+    return "\n".join(header + bodies)
+
+
+def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
+    """
+    Generate the convpy4rmfame-like pipeline:
+      - Main df computations (no filtering)
+      - For each FISHVOL root, a df_fv_<root> filtered from Jan 1 of base year and its dependents
+      - For each CONVERT target frequency, a df_cv_<freq> for conversions and their dependents
+      - Melt each and union at the end
+    """
+    group_for_node, fishvol_roots, fishvol_closures, convert_meta, main_nodes, adj = partition_groups(parsed_cmds)
+
     adj_all, indeg_all = _build_graph(parsed_cmds)
     levels = _topo_levels(adj_all, indeg_all)
 
     def nodes_in_levels(filter_set: Set[str]) -> List[List[str]]:
-        out: List[List[str]] = []
-        for lvl in levels:
-            picked = [n for n in lvl if n in filter_set]
-            if picked:
-                out.append(picked)
-        return out
+        return _nodes_in_levels(levels, filter_set)
 
     code = []
     code.append('import polars as pl')
@@ -186,6 +336,7 @@ def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
     code.append("    'volumes': pl.Series('volumes', range(1, 74)),")
     code.append("})")
     code.append("")
+
     # MAIN PIPELINE
     if main_nodes:
         code.append("# ---- MAIN PIPELINE (no date filtering) ----")
@@ -194,12 +345,12 @@ def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
             cols = []
             for t in lvl:
                 fn = variable_to_function_name(t)
-                # formulas functions are zero-arg; alias back to target name
                 cols.append(f"{fn}().alias('{t}')")
             code.append("df = df.with_columns([")
             code.append("    " + ",\n    ".join(cols))
             code.append("])")
             code.append("")
+
     # FISHVOL PIPELINES
     for fr in fishvol_roots:
         closure = fishvol_closures[fr]
@@ -221,16 +372,16 @@ def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
             code.append("    " + ",\n    ".join(cols))
             code.append("])")
             code.append("")
+
     # CONVERT PIPELINES
     for to_freq, metas in convert_meta.items():
         code.append(f"# ---- CONVERT SUB-PIPELINE to '{to_freq}' ----")
-        # We build per-target select, then concat columns
         code.append(f"df_cv_{to_freq} = None")
+        every = {'m': '1mo', 'q': '1q', 'a': '1y'}.get(to_freq, to_freq)
         for meta in metas:
             tgt = meta['target']
             src = meta['refs'][0]
-            every = {'m': '1mo', 'q': '1q', 'a': '1y'}.get(to_freq, to_freq)
-            # Demonstration using group_by_dynamic; replace with ple.convert if needed
+            # Keep conversions separate; simple example using mean aggregation
             code.append(f"_cv_tmp = (df.select(['date', '{src}'])"
                         f".group_by_dynamic('date', every='{every}')"
                         f".agg(pl.col('{src}').mean().alias('{tgt}')))")
@@ -238,7 +389,6 @@ def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
         code.append("")
 
     # FINAL MELT + UNION
-    # Collect columns for each frame
     main_cols = [t for t in main_nodes]
     code.append("# ---- FINAL MELT AND UNION ----")
     if main_cols:
@@ -253,13 +403,21 @@ def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
     cv_names = []
     for to_freq in convert_meta.keys():
         cv_names.append(f"cv_long_{to_freq}")
-        code.append(f"cv_long_{to_freq} = (df_cv_{to_freq} if df_cv_{to_freq} is not None else pl.DataFrame({'{'}'date':[]{'}'}))")
+        code.append(f"cv_long_{to_freq} = (df_cv_{to_freq} if df_cv_{to_freq} is not None else pl.DataFrame({'{'+'date':[]'+'}'}))")
         code.append(f"cv_long_{to_freq} = cv_long_{to_freq}.melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE') if df_cv_{to_freq} is not None else cv_long_{to_freq}")
     concat_sources = ['main_long'] + fv_names + cv_names
     code.append(f"final_long = pl.concat([{', '.join(concat_sources)}], how='vertical_relaxed')")
     code.append("print(final_long)")
     return '\n'.join(code)
 
-def generate_from_script(fame_script: str) -> str:
-    parsed, _aliases = preprocess_commands(fame_script)
-    return generate_pipeline_code(parsed)
+
+def write_formulas_py(parsed_cmds: List[Dict], path: str = "formulas.py"):
+    src = generate_formulas_py_string(parsed_cmds)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+
+
+def write_pipeline_py(parsed_cmds: List[Dict], path: str = "convpy4rmfame.py"):
+    src = generate_pipeline_code(parsed_cmds)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
