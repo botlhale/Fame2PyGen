@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logos/fame2pygen.png" alt="Fame2PyGen Logo" width="600"/>
+</div>
+
 # Fame2PyGen
 
 Convert FAME-style formula scripts (`.inp`) into executable, modular Python code using [Polars](https://pola.rs/) (and a companion economic toolkit library `polars_econ`).  
@@ -6,7 +10,6 @@ The tool parses FAME-like expressions and generates:
 1. A formulas module (e.g. `cformulas.py`) containing one pure function per series (as **Polars expression builders**).
 2. A pipeline script (e.g. `c_pipeline.py`) that composes those functions against an input DataFrame.
 
-![Logo](logos/your_logo_primary.png)
 
 ---
 
@@ -184,17 +187,6 @@ See [CHANGELOG.md](CHANGELOG.md). Versioning follows Semantic Versioning.
 ## License
 
 MIT (see `LICENSE`).
-
----
-
-## Logos
-
-Existing logos reused from the original repository in `logos/`.  
-Example inline usage:
-
-```markdown
-![Alt Logo](logos/your_logo_symbol.png)
-```
 
 ---
 
