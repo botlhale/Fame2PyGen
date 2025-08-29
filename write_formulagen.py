@@ -403,7 +403,7 @@ def generate_pipeline_code(parsed_cmds: List[Dict]) -> str:
     cv_names = []
     for to_freq in convert_meta.keys():
         cv_names.append(f"cv_long_{to_freq}")
-        code.append(f"cv_long_{to_freq} = (df_cv_{to_freq} if df_cv_{to_freq} is not None else pl.DataFrame({'{'+'date':[]'+'}'}))")
+        code.append(f"cv_long_{to_freq} = (df_cv_{to_freq} if df_cv_{to_freq} is not None else pl.DataFrame({{'date':[]}}))")
         code.append(f"cv_long_{to_freq} = cv_long_{to_freq}.melt(id_vars='date', variable_name='TIME_SERIES_NAME', value_name='VALUE') if df_cv_{to_freq} is not None else cv_long_{to_freq}")
     concat_sources = ['main_long'] + fv_names + cv_names
     code.append(f"final_long = pl.concat([{', '.join(concat_sources)}], how='vertical_relaxed')")
