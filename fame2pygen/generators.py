@@ -177,7 +177,7 @@ def generate_pipeline_script(ctx: GenerationContext,
                 cols_to_add.append(f"    {fn_name}({', '.join(arg_exprs)}).alias('{fn_name}')")
             elif formula.type == "mchain":
                 pair_str = ", ".join([
-                    f\"({'-' if op=='-' else ''}pl.col('{sanitize_func_name('p'+var).upper()}'), pl.col('{sanitize_func_name(var).upper()}'))\"
+                    f'({"-" if op=="-" else ""}pl.col(\'{sanitize_func_name("p"+var).upper()}\'), pl.col(\'{sanitize_func_name(var).upper()}\'))'
                     for op, var in formula.terms
                 ])
                 cols_to_add.append(
@@ -185,7 +185,7 @@ def generate_pipeline_script(ctx: GenerationContext,
                 )
             elif formula.type == "fishvol":
                 pairs_str = ", ".join([
-                    f\"(pl.col('{sanitize_func_name(s1).upper()}'), pl.col('{sanitize_func_name(s2).upper()}'))\"
+                    f"(pl.col('{sanitize_func_name(s1).upper()}'), pl.col('{sanitize_func_name(s2).upper()}'))"
                     for s1, s2 in formula.pairs
                 ])
                 base = f"FISHVOL(series_pairs=[{pairs_str}], date_col=pl.col('DATE'), rebase_year={formula.year})"
