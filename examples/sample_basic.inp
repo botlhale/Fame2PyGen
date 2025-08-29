@@ -1,0 +1,19 @@
+# Example FAME-like input script
+freq m
+a$=v123*12
+a=v143*12
+pa$=v123*3
+pa=v143*4
+aa=a$/a
+paa=pa$/pa
+bb=aa+a
+pbb=paa+pa
+d = {bb}
+abc=$mchain("a$ + a + bb","2025")
+zed=convert(a$,q,disc,ave)
+xyz=$fishvol_rebase({a},{pa},2017)*12
+b$=1234*12
+pb$=1434*12
+xyz$=$fishvol_rebase({b$},{pb$},2017)*12
+abc1=$mchain("a$ - a + bb","2025")
+acc=$mchain("a$ - bb","2022")
