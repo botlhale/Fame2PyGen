@@ -85,6 +85,40 @@ def parse_mchain_command(line: str) -> Optional[ParsedCommand]:
         return ParsedCommand(type="mchain", raw=line, target=target, refs=refs, terms=terms, year=year)
     return None
 
+def is_timeseries_numeric_expression(rhs: str) -> bool:
+    """
+    Detect if an expression contains numeric patterns that should be treated as time series references.
+    Examples:
+    - "1234*12" -> True (number * factor)
+    - "1233+2334+4827" -> True (multiple numbers being added)
+    - "123.45" -> False (decimal number, likely literal)
+    - "12" -> False (simple number, likely literal)
+    """
+    # Check for multiplication pattern: number*factor
+    if re.match(r'^\s*\d{3,}\s*\*\s*\d+\s*$', rhs):
+        return True
+    
+    # Check for addition pattern with multiple numbers: number+number+...
+    if '+' in rhs and re.match(r'^\s*\d{3,}(\s*\+\s*\d{3,})+\s*$', rhs):
+        return True
+    
+    return False
+
+def extract_timeseries_numbers(rhs: str) -> List[str]:
+    """Extract numeric time series references from an expression."""
+    numbers = []
+    
+    # For multiplication: extract the first number
+    mult_match = re.match(r'^\s*(\d{3,})\s*\*\s*\d+\s*$', rhs)
+    if mult_match:
+        numbers.append(mult_match.group(1))
+    
+    # For addition: extract all numbers
+    elif '+' in rhs and re.match(r'^\s*\d{3,}(\s*\+\s*\d{3,})+\s*$', rhs):
+        numbers.extend(re.findall(r'\d{3,}', rhs))
+    
+    return numbers
+
 def parse_simple_command(line: str) -> Optional[ParsedCommand]:
     var_pattern = r"[a-zA-Z0-9_$.]+"
     if simple_match := re.match(fr"^\s*({var_pattern})\s*=\s*(.+)$", line, re.IGNORECASE):
@@ -92,9 +126,18 @@ def parse_simple_command(line: str) -> Optional[ParsedCommand]:
         original_rhs = rhs_str.strip()
         rhs = re.sub(r'\{([^}]+)\}', r'\1', original_rhs)  # unwrap single-item braces
         all_potential_refs = re.findall(fr'({var_pattern})', rhs)
+        
+        # Filter out numeric literals, but keep variable names
         refs = [r for r in all_potential_refs
                 if not r.replace('.', '', 1).isdigit()
                 and r.lower() != target.lower()]
+        
+        # Check if this expression contains time series numeric patterns
+        if is_timeseries_numeric_expression(rhs):
+            # Add numeric time series references
+            timeseries_numbers = extract_timeseries_numbers(rhs)
+            refs.extend(timeseries_numbers)
+        
         return ParsedCommand(type="simple", raw=line, target=target,
                              refs=list(set(refs)), rhs=rhs, original_rhs=original_rhs)
     return None

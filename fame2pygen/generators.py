@@ -3,7 +3,32 @@ import textwrap
 from .model import ParsedCommand, GenerationContext
 from .utils import sanitize_func_name
 
-def fame_expr_to_polars(rhs_expr: str, memory: Dict[str, str]) -> str:
+def convert_timeseries_expression(expr: str, memory: Dict[str, str]) -> str:
+    """
+    Convert time series expressions to appropriate Polars expressions.
+    Handles patterns like:
+    - "1234*12" -> pl.col("1234").mul(12)
+    - "1233+2334+4827" -> pl.sum_horizontal([pl.col("1233"), pl.col("2334"), pl.col("4827")])
+    """
+    import re
+    
+    # Handle multiplication pattern: number*factor
+    mult_match = re.match(r'^\s*(\d{3,})\s*\*\s*(\d+)\s*$', expr)
+    if mult_match:
+        timeseries_id, factor = mult_match.groups()
+        return f'pl.col("{timeseries_id}").mul({factor})'
+    
+    # Handle addition pattern with multiple numbers: number+number+...
+    if '+' in expr and re.match(r'^\s*\d{3,}(\s*\+\s*\d{3,})+\s*$', expr):
+        numbers = re.findall(r'\d{3,}', expr)
+        col_exprs = [f'pl.col("{num}")' for num in numbers]
+        return f'pl.sum_horizontal([{", ".join(col_exprs)}])'
+    
+    # If no time series pattern matched, fall back to regular variable substitution
+    return fame_expr_to_polars_original(expr, memory)
+
+def fame_expr_to_polars_original(rhs_expr: str, memory: Dict[str, str]) -> str:
+    """Original fame_expr_to_polars function for regular variable substitution."""
     import re
     expr = rhs_expr.strip()
     sorted_vars = sorted(memory.keys(), key=len, reverse=True)
@@ -11,6 +36,18 @@ def fame_expr_to_polars(rhs_expr: str, memory: Dict[str, str]) -> str:
         pattern = rf'(?<![a-zA-Z0-9_$]){re.escape(v)}(?![a-zA-Z0-9_$])'
         expr = re.sub(pattern, memory[v], expr)
     return expr
+
+def fame_expr_to_polars(rhs_expr: str, memory: Dict[str, str]) -> str:
+    """
+    Convert FAME expressions to Polars expressions, with support for time series numeric references.
+    """
+    # First check if this is a time series numeric expression
+    from .parser import is_timeseries_numeric_expression
+    if is_timeseries_numeric_expression(rhs_expr):
+        return convert_timeseries_expression(rhs_expr, memory)
+    
+    # Otherwise use regular variable substitution
+    return fame_expr_to_polars_original(rhs_expr, memory)
 
 def build_generation_context(parsed_cmds: List[ParsedCommand], fame_commands: List[str]) -> GenerationContext:
     ctx = GenerationContext(fame_commands=fame_commands, parsed=parsed_cmds)
@@ -48,18 +85,24 @@ def generate_formulas_module(ctx: GenerationContext) -> str:
         """).strip()
 
         refs = sorted(set(r.lower() for r in entry.refs))
-        arg_str = ", ".join([f"{sanitize_func_name(ref)}: pl.Expr" for ref in refs])
+        
+        # Separate numeric time series refs from variable refs for argument generation
+        numeric_refs = [r for r in refs if r.isdigit()]
+        variable_refs = [r for r in refs if not r.isdigit()]
+        
+        arg_str = ", ".join([f"{sanitize_func_name(ref)}: pl.Expr" for ref in variable_refs])
         signature = f"def {fn_name}({arg_str}) -> pl.Expr:"
 
         if not refs:
-            # Attempt literal
+            # No references at all - attempt literal evaluation
             try:
                 evaluated_rhs = eval(entry.rhs)  # noqa: S307 (controlled context)
                 body_expr = f"pl.lit({evaluated_rhs})"
             except Exception:
                 body_expr = f"pl.lit({entry.rhs})"
         else:
-            substitution_map = {ref: sanitize_func_name(ref) for ref in refs}
+            # Create substitution map only for variable references (not numeric time series)
+            substitution_map = {ref: sanitize_func_name(ref) for ref in variable_refs}
             body_expr = fame_expr_to_polars(entry.rhs.lower(), substitution_map)
 
         body = f"""    res = (
