@@ -27,6 +27,68 @@ def convert_timeseries_expression(expr: str, memory: Dict[str, str]) -> str:
     # If no time series pattern matched, fall back to regular variable substitution
     return fame_expr_to_polars_original(expr, memory)
 
+def convert_time_shift_expression(expr: str, memory: Dict[str, str]) -> str:
+    """
+    Convert expressions with time shifts like var[t+1] to Polars expressions with shift operations.
+    """
+    import re
+    
+    # Replace time shift patterns with shift operations
+    def replace_time_shift(match):
+        var_name = match.group(1)
+        offset_str = match.group(2)
+        offset = int(offset_str)
+        
+        # Map variable name to its sanitized form
+        var_expr = memory.get(var_name.lower(), var_name.lower())
+        
+        if offset > 0:
+            # Positive offset means shift forward (get future values)
+            return f'{var_expr}.shift(-{offset})'
+        else:
+            # Negative offset means shift backward (get past values)
+            return f'{var_expr}.shift({abs(offset)})'
+    
+    # Replace all time shift patterns
+    result = re.sub(r'(\w+)\[t([+-]\d+)\]', replace_time_shift, expr)
+    return result
+
+def convert_pct_function_calls(expr: str, memory: Dict[str, str]) -> str:
+    """
+    Convert pct() function calls to Polars expressions using polars_econ.pct().
+    """
+    import re
+    
+    def replace_pct_call(match):
+        arg = match.group(1).strip()
+        
+        # Check if argument has time shift notation
+        time_shift_match = re.match(r'(\w+)\[t([+-]\d+)\]', arg)
+        if time_shift_match:
+            var_name = time_shift_match.group(1)
+            offset_str = time_shift_match.group(2)
+            offset = int(offset_str)
+            
+            # Map variable name to its sanitized form
+            var_expr = memory.get(var_name.lower(), var_name.lower())
+            
+            # Create shift expression and pass to pct with default offset
+            if offset > 0:
+                shifted_expr = f'{var_expr}.shift(-{offset})'
+            else:
+                shifted_expr = f'{var_expr}.shift({abs(offset)})'
+            
+            # Use default offset for pct function (percentage change period)
+            return f'PCT({shifted_expr})'
+        else:
+            # Regular variable reference
+            var_expr = memory.get(arg.lower(), arg.lower())
+            return f'PCT({var_expr})'
+    
+    # Replace all pct function calls
+    result = re.sub(r'pct\s*\(\s*([^)]+)\s*\)', replace_pct_call, expr, flags=re.IGNORECASE)
+    return result
+
 def fame_expr_to_polars_original(rhs_expr: str, memory: Dict[str, str]) -> str:
     """Original fame_expr_to_polars function for regular variable substitution."""
     import re
@@ -39,22 +101,39 @@ def fame_expr_to_polars_original(rhs_expr: str, memory: Dict[str, str]) -> str:
 
 def fame_expr_to_polars(rhs_expr: str, memory: Dict[str, str]) -> str:
     """
-    Convert FAME expressions to Polars expressions, with support for time series numeric references.
+    Convert FAME expressions to Polars expressions, with support for time series numeric references,
+    time shifts, and pct function calls.
     """
+    from .parser import is_timeseries_numeric_expression, contains_time_shift_references, contains_pct_function
+    
     # First check if this is a time series numeric expression
-    from .parser import is_timeseries_numeric_expression
     if is_timeseries_numeric_expression(rhs_expr):
         return convert_timeseries_expression(rhs_expr, memory)
     
-    # Otherwise use regular variable substitution
-    return fame_expr_to_polars_original(rhs_expr, memory)
+    expr = rhs_expr.strip()
+    
+    # Handle time shift expressions
+    if contains_time_shift_references(expr):
+        expr = convert_time_shift_expression(expr, memory)
+    
+    # Handle pct function calls
+    if contains_pct_function(expr):
+        expr = convert_pct_function_calls(expr, memory)
+    
+    # Apply regular variable substitution to any remaining variables
+    expr = fame_expr_to_polars_original(expr, memory)
+    
+    return expr
 
 def build_generation_context(parsed_cmds: List[ParsedCommand], fame_commands: List[str]) -> GenerationContext:
+    from .parser import contains_pct_function
     ctx = GenerationContext(fame_commands=fame_commands, parsed=parsed_cmds)
     for p in parsed_cmds:
         if p.type == "mchain": ctx.has_mchain = True
         if p.type == "convert": ctx.has_convert = True
         if p.type == "fishvol": ctx.has_fishvol = True
+        # Check if any command uses pct function
+        if p.rhs and contains_pct_function(p.rhs): ctx.has_pct = True
     return ctx
 
 def generate_formulas_module(ctx: GenerationContext) -> str:
@@ -129,6 +208,12 @@ def generate_formulas_module(ctx: GenerationContext) -> str:
             "def FISHVOL(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int) -> pl.Expr:\n"
             "    import polars_econ as ple\n"
             "    return ple.fishvol(series_pairs, date_col, rebase_year)\n"
+        )
+    if ctx.has_pct:
+        fn_defs.append(
+            "def PCT(expr: pl.Expr, offset: int = 1) -> pl.Expr:\n"
+            "    import polars_econ as ple\n"
+            "    return ple.pct(expr, offset)\n"
         )
 
     header = "import polars as pl\nfrom typing import List, Tuple\n\n"
