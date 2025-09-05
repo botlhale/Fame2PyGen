@@ -42,3 +42,24 @@ xyz=$fishvol_rebase({a},{pa},2017)*12
 b$=1234*12
 pb$=1434*12
 xyz$=$fishvol_rebase({b$},{pb$},2017)*12
+
+# Time series shift and PCT function examples
+# Basic variable assignments for complex example
+vbot=v123
+v23=v143
+vbots = vbot
+v23s = v23
+
+# Time series shift examples
+next_period = a[t+1]
+prev_period = a[t-1]
+two_ahead = a[t+2]
+three_back = a[t-3]
+
+# PCT function examples
+growth_rate = pct(a)
+lagged_growth = pct(a[t-1])
+future_growth = pct(a[t+1])
+
+# Complex expression combining time shifts and PCT function
+set vbots[t] = vbots[t+1]/(1+(pct(v23s[t+1])/100))
