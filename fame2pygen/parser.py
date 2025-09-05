@@ -119,18 +119,95 @@ def extract_timeseries_numbers(rhs: str) -> List[str]:
     
     return numbers
 
+def contains_time_shift_references(rhs: str) -> bool:
+    """Detect if expression contains time series references with offsets like var[t+1]."""
+    return bool(re.search(r'\w+\[t[+-]\d+\]', rhs))
+
+def contains_pct_function(rhs: str) -> bool:
+    """Detect if expression contains pct() function calls."""
+    return bool(re.search(r'pct\s*\(', rhs, re.IGNORECASE))
+
+def extract_time_shift_references(rhs: str) -> List[str]:
+    """Extract variable names that use time shift notation like var[t+1]."""
+    # Find all patterns like variable[t+offset] or variable[t-offset]
+    matches = re.findall(r'(\w+)\[t[+-]\d+\]', rhs)
+    return list(set(matches))
+
+def extract_pct_function_args(rhs: str) -> List[str]:
+    """Extract variable references from pct() function calls."""
+    # Find pct function calls and extract their arguments
+    pct_matches = re.findall(r'pct\s*\(\s*([^)]+)\s*\)', rhs, re.IGNORECASE)
+    refs = []
+    for match in pct_matches:
+        # Parse the argument, which could be a variable with time shift like v23s[t+1]
+        arg = match.strip()
+        # Extract the base variable name from patterns like var[t+1]
+        var_match = re.match(r'(\w+)\[t[+-]\d+\]', arg)
+        if var_match:
+            refs.append(var_match.group(1))
+        else:
+            # Regular variable reference
+            if re.match(r'^\w+$', arg):
+                refs.append(arg)
+    return refs
+
+def parse_set_command(line: str) -> Optional[ParsedCommand]:
+    """Parse set commands like 'set variable = expression'"""
+    set_match = re.match(r"^\s*set\s+(.+)$", line, re.IGNORECASE)
+    if set_match:
+        # Extract the assignment part and parse it as a simple command
+        assignment = set_match.group(1).strip()
+        # Create a temporary line without 'set' and parse it
+        temp_line = assignment
+        result = parse_simple_command(temp_line)
+        if result:
+            # Update the raw line to include 'set'
+            result.raw = line
+            return result
+    return None
+    """Extract variable references from pct() function calls."""
+    # Find pct function calls and extract their arguments
+    pct_matches = re.findall(r'pct\s*\(\s*([^)]+)\s*\)', rhs, re.IGNORECASE)
+    refs = []
+    for match in pct_matches:
+        # Parse the argument, which could be a variable with time shift like v23s[t+1]
+        arg = match.strip()
+        # Extract the base variable name from patterns like var[t+1]
+        var_match = re.match(r'(\w+)\[t[+-]\d+\]', arg)
+        if var_match:
+            refs.append(var_match.group(1))
+        else:
+            # Regular variable reference
+            if re.match(r'^\w+$', arg):
+                refs.append(arg)
+    return refs
+
 def parse_simple_command(line: str) -> Optional[ParsedCommand]:
-    var_pattern = r"[a-zA-Z0-9_$.]+"
+    # Updated pattern to include square brackets for time series indices
+    var_pattern = r"[a-zA-Z0-9_$.]+(?:\[[^\]]+\])?"
     if simple_match := re.match(fr"^\s*({var_pattern})\s*=\s*(.+)$", line, re.IGNORECASE):
         target, rhs_str = simple_match.groups()
         original_rhs = rhs_str.strip()
         rhs = re.sub(r'\{([^}]+)\}', r'\1', original_rhs)  # unwrap single-item braces
-        all_potential_refs = re.findall(fr'({var_pattern})', rhs)
+        
+        # Extract regular variable references (simpler pattern for finding vars in expression)
+        basic_var_pattern = r"[a-zA-Z0-9_$.]+"
+        all_potential_refs = re.findall(fr'({basic_var_pattern})', rhs)
         
         # Filter out numeric literals, but keep variable names
         refs = [r for r in all_potential_refs
                 if not r.replace('.', '', 1).isdigit()
-                and r.lower() != target.lower()]
+                and r.lower() != target.lower().split('[')[0]  # Compare base variable name
+                and r.lower() != 't'  # Filter out 't' from time shift patterns
+                and not re.match(r'^pct$', r, re.IGNORECASE)]  # Exclude 'pct' function name
+        
+        # Add time shift variable references
+        time_shift_refs = extract_time_shift_references(rhs)
+        refs.extend(time_shift_refs)
+        
+        # Add pct function argument references
+        pct_refs = extract_pct_function_args(rhs)
+        refs.extend(pct_refs)
         
         # Check if this expression contains time series numeric patterns
         if is_timeseries_numeric_expression(rhs):
@@ -150,6 +227,7 @@ PARSERS = [
     parse_fishvol_command,
     parse_convert_command,
     parse_mchain_command,
+    parse_set_command,
     parse_simple_command
 ]
 

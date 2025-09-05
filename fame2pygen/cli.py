@@ -19,6 +19,10 @@ def convert(series: pl.DataFrame, date_col_name: str, as_freq: str, to_freq: str
 
 def fishvol(series_pairs: List[Tuple[pl.Expr, pl.Expr]], date_col: pl.Expr, rebase_year: int):
     return series_pairs[0][0]
+
+def pct(expr: pl.Expr, offset: int = 1) -> pl.Expr:
+    \"\"\"Calculate percentage change with specified offset.\"\"\"
+    return ((expr / expr.shift(offset)) - 1) * 100
 """
 
 def main(argv=None):

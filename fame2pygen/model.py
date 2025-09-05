@@ -23,3 +23,4 @@ class GenerationContext:
     has_mchain: bool = False
     has_convert: bool = False
     has_fishvol: bool = False
+    has_pct: bool = False
