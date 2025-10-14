@@ -8,7 +8,7 @@ setup(
     description='A tool for converting FAME models to Python.',
     packages=find_packages(),
     install_requires=[
-        # List your package dependencies here
+        'polars>=0.19.0',
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
