@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logos/fame2pygen.png" alt="FAME 2 Python Logo" width="250"/>
+</div>
+
 # Fame2PyGen: Automated FAME to Python Model Converter
 
 **Transform legacy FAME economic models into modern, high-performance Python code with Polars.**
