@@ -1,0 +1,1 @@
+<complete content of the formulas_generator.py file>
