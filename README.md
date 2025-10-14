@@ -53,3 +53,41 @@ from ts_transformer import ts_transformer
 
 df = pl.DataFrame({"DATE": [...], "V123S": [...], "V1014S": [...]})
 result = ts_transformer(df)
+```
+
+## ⚠️ Important Cautions
+
+**Fame2PyGen is a powerful automation tool, but it's not perfect.** The generated code may require minor manual adjustments:
+
+- **Dependency Ordering**: While we strive for correct computation levels, complex models with intricate dependencies might need tweaks
+- **Edge Cases**: Rare FAME patterns or custom functions may not be fully supported
+- **Validation Required**: Always test the generated code against known FAME outputs
+- **Performance Tuning**: Generated code might benefit from Polars optimizations
+
+**Recommendation**: Treat Fame2PyGen as your first draft. Review, test, and refine the output before production use.
+
+## Installation
+
+```bash
+pip install fame2pygen
+```
+
+Or clone and install:
+
+```bash
+git clone https://github.com/yourusername/Fame2PyGen.git
+cd Fame2PyGen
+pip install -e .
+```
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## Architecture
+
+For technical details, see [ARCHITECTURE.md](ARCHITECTURE.md).
