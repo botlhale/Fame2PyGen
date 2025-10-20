@@ -72,6 +72,17 @@ def test_freq_command():
     assert result["type"] == "freq"
     assert result["freq"] == "m"
 
+def test_freq_business_day_command():
+    # Test 'freq b' for business day
+    result_b = parse_fame_formula("freq b")
+    assert result_b["type"] == "freq"
+    assert result_b["freq"] == "b"
+    
+    # Test 'freq bus' for business day (alternative syntax)
+    result_bus = parse_fame_formula("freq bus")
+    assert result_bus["type"] == "freq"
+    assert result_bus["freq"] == "bus"
+
 def test_date_all_command():
     result = parse_fame_formula("date *")
     assert result["type"] == "date"
@@ -114,6 +125,48 @@ def test_date_filter_in_generated_code():
     finally:
         if os.path.exists(output_file):
             os.unlink(output_file)
+
+def test_business_day_frequency_with_convert():
+    """Test that business day frequency works with convert function."""
+    from fame2pygen.fame2py_converter import generate_formulas_file, generate_test_script
+    import tempfile
+    import os
+    
+    cmds = [
+        "freq b",  # Business day frequency
+        "v_daily = convert(v_monthly, 'm', 'b', 'linear', 'end')"
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        formulas_file = f.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        ts_file = f.name
+    
+    try:
+        # Generate files
+        generate_formulas_file(cmds, formulas_file)
+        generate_test_script(cmds, ts_file)
+        
+        # Read generated formulas
+        with open(formulas_file, 'r') as f:
+            formulas_content = f.read()
+        
+        # Verify CONVERT function is generated
+        assert "def CONVERT" in formulas_content
+        assert "polars_econ" in formulas_content
+        
+        # Read generated transformer
+        with open(ts_file, 'r') as f:
+            ts_content = f.read()
+        
+        # Verify the transformation includes convert call
+        assert "v_daily" in ts_content or "V_DAILY" in ts_content
+        
+    finally:
+        if os.path.exists(formulas_file):
+            os.unlink(formulas_file)
+        if os.path.exists(ts_file):
+            os.unlink(ts_file)
 
 if __name__ == "__main__":
     pytest.main()
