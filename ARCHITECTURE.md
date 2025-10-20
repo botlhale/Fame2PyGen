@@ -41,6 +41,7 @@ Fame2PyGen consists of two main modules that work together to convert FAME scrip
 | Simple Assignment | Direct mapping | `ASSIGN_SERIES("VBOT", pl.lit(1))` |
 | Arithmetic | Operator detection | `ADD_SERIES("V1", pl.col("V2"), pl.col("V3"))` |
 | Time Indexing | Shift transformation | `pl.col("V1").shift(-1)` |
+| Point-in-Time Assignment | Date filtering and update | `POINT_IN_TIME_ASSIGN(pdf, "GDP", "2020-01-01", pl.lit(1000))` |
 | SHIFT_PCT Backwards | Batch processing | `SHIFT_PCT_BACKWARDS_MULTIPLE(...)` |
 | Chain Operations | Function wrapping | `CHAIN(price_quantity_pairs=[...])` |
 | Frequency Commands | Metadata tracking | `{"type": "freq", "freq": "b"}` |
@@ -59,6 +60,30 @@ Fame2PyGen supports all standard FAME frequency codes:
 | `b` or `bus` | Business | Business days (excludes weekends/holidays) |
 
 The frequency setting is parsed and made available to polars-econ functions (like `convert()`) which handle frequency-specific transformations including business day calendar adjustments.
+
+### Point-in-Time Assignment Support
+
+Fame2PyGen now supports FAME-style date-indexed assignments for updating specific dates in time series:
+
+**Syntax Detection:**
+- Pattern: `variable["date"] = expression` or `variable['date'] = expression`
+- Supports formats: `"YYYY-MM-DD"` (e.g., "2020-01-01") and `"YYYYQN"` (e.g., "2020Q1")
+
+**Code Generation:**
+- Simple values: `POINT_IN_TIME_ASSIGN(pdf, "GDP", "2020-01-01", pl.lit(1000))`
+- References to other dates: Uses lambda expressions to extract values at specific dates
+- Example: `adjusted["2020-01-01"] = gdp["2019-12-31"] * 1.05` generates:
+  ```python
+  POINT_IN_TIME_ASSIGN(pdf, "ADJUSTED", "2020-01-01", 
+      lambda df: df.filter(pl.col("DATE") == "2019-12-31").select(pl.col("GDP")).item() * 1.05)
+  ```
+
+**Helper Function:**
+The `POINT_IN_TIME_ASSIGN` function:
+1. Parses the date string (supporting multiple formats)
+2. Filters the DataFrame for the target date
+3. Evaluates the value expression (supports both `pl.Expr` and callable)
+4. Updates the specific row via a join operation
 
 ## Dependency Analysis Details
 
