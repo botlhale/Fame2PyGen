@@ -177,7 +177,9 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
     Replace tokens in expr by placeholders __PH_n__ and return (expr_with_placeholders, placeholders_map).
     substitution_map maps token.lower() -> replacement string to prefer (e.g. precomputed pl.col("X").shift(-1)).
     Numeric literals and bare 't' are left as-is.
+    Function names (pct, convert, etc.) are left as-is to be processed later.
     """
+    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
     placeholders: Dict[str, str] = {}
     parts: List[str] = []
     last = 0
@@ -189,6 +191,11 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
         key = tok.lower()
         # keep bare 't' and small numeric literals
         if key == "t" or (_is_strict_number(tok) and _is_numeric_literal(tok)):
+            parts.append(tok)
+            last = e
+            continue
+        # keep function names as-is (they'll be processed by pct conversion logic)
+        if key in function_names:
             parts.append(tok)
             last = e
             continue
@@ -350,7 +357,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     s = normalize_formula_text(line)
 
     # 1) top-level chain / mchain first (must not be parsed as arithmetic)
-    ch = _parse_chain_top_level(s_raw)
+    ch = _parse_chain_top_level(s)
     if ch:
         return ch
 
@@ -380,8 +387,9 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     m_convert = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*convert\((.+)\)\s*$", s, re.IGNORECASE)
     if m_convert:
         target, args_str = m_convert.groups()
-        args = [a.strip() for a in re.split(r"\s*,\s*", args_str)]
-        if len(args) == 4:
+        # Split args carefully, respecting quoted strings
+        args = [a.strip().strip("'\"") for a in re.split(r""",\s*(?=(?:[^"']*["'][^"']*["'])*[^"']*$)""", args_str)]
+        if len(args) >= 4:  # Accept 4 or more parameters
             return {"type": "convert", "target": target, "refs": [args[0]], "params": args}
 
     # 6) fishvol
@@ -399,16 +407,23 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             variable_refs = [s for s in vols + prices if not _is_strict_number(s)]
             return {"type": "fishvol", "target": target, "refs": variable_refs, "pairs": pairs, "year": year, "trailing_op": trailing.strip() if trailing else None}
 
-    # 7) Check for SHIFT_PCT pattern explicitly
-    msp = _shift_pct_re.match(s)
-    if msp:
-        ser1 = msp.group(1)
-        offs1 = int(msp.group(2))
-        ser2 = msp.group(3)
-        offs2 = int(msp.group(4))
-        if offs1 == offs2:
-            return {"type": "shift_pct", "target": ser1, "refs": [ser1, ser2], "original_rhs": s, 
-                    "ser1": ser1, "ser2": ser2, "offset": offs1}
+    # 7) Check for SHIFT_PCT pattern explicitly - extract RHS first if assignment present
+    if "=" in s:
+        lhs_temp, rhs_temp = s.split("=", 1)
+        lhs_temp = lhs_temp.strip()
+        rhs_temp = rhs_temp.strip()
+        msp = _shift_pct_re.match(rhs_temp)
+        if msp:
+            ser1 = msp.group(1)
+            offs1 = int(msp.group(2))
+            ser2 = msp.group(3)
+            offs2 = int(msp.group(4))
+            if offs1 == offs2:
+                # Extract target from LHS - handle time-indexed target like v123s[t]
+                target_match = re.match(r"^\s*([A-Za-z0-9_$]+)", lhs_temp)
+                target = target_match.group(1) if target_match else lhs_temp
+                return {"type": "shift_pct", "target": target, "refs": [ser1, ser2], "original_rhs": rhs_temp, 
+                        "ser1": ser1, "ser2": ser2, "offset": offs1}
 
     # 8) generic assignment / arithmetic fallback
     if "=" in s:
@@ -471,13 +486,21 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
         # SHIFT_PCT detection with enhanced pattern recognition - also detect in assignments
         normalized = normalize_formula_text(s)
         if "=" in normalized:
-            rhs = normalized.split("=", 1)[1].strip()
-            if _shift_pct_re.match(rhs):
+            lhs_check, rhs_check = normalized.split("=", 1)
+            lhs_check = lhs_check.strip()
+            rhs_check = rhs_check.strip()
+            if _shift_pct_re.match(rhs_check):
                 ctx["need_shiftpct"] = True
-        
-        # SHIFT_PCT_BACKWARDS detection (placeholder - actual detection handled in parse_fame_formula)
-        if _shift_pct_re.search(normalized):
-            ctx["need_shiftpct_backwards"] = True
+                # Check if this is a backwards pattern: LHS has [t] and RHS has [t+N] with N>0
+                lhs_time_match = re.search(r"\[\s*t\s*([+-]?\d*)\s*\]", lhs_check)
+                rhs_time_match = re.search(r"\[\s*t\s*\+\s*(\d+)\s*\]", rhs_check)
+                if lhs_time_match and rhs_time_match:
+                    lhs_offset = lhs_time_match.group(1)
+                    lhs_offset = int(lhs_offset) if lhs_offset and lhs_offset not in ('+', '-') else 0
+                    rhs_offset = int(rhs_time_match.group(1))
+                    # Backwards if LHS is current time (t or t+0) and RHS references future time (t+N, N>0)
+                    if lhs_offset == 0 and rhs_offset > 0:
+                        ctx["need_shiftpct_backwards"] = True
         
         # assign-series pattern
         if re.match(r"^\s*[A-Za-z0-9_$]+\s*=\s*[A-Za-z0-9_$.]+\s*$", s):

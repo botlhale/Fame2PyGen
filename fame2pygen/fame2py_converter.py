@@ -36,6 +36,8 @@ def analyze_dependencies(parsed_cmds: List[Dict]) -> Tuple[defaultdict, defaultd
     Analyze dependencies between variables, considering time-indexed references.
     Builds a DAG where nodes are variables (lowercased), and edges represent dependencies.
     Time-indexed variables (e.g., v[t+1]) are mapped to their base names for dependency tracking.
+    SHIFT_PCT patterns with self-references (e.g., v[t] = v[t+1]/...) are excluded from the
+    dependency graph as they are handled specially.
     """
     adj = defaultdict(list)  # adjacency list: var -> list of vars that depend on it
     in_degree = defaultdict(int)  # number of dependencies for each var
@@ -49,10 +51,17 @@ def analyze_dependencies(parsed_cmds: List[Dict]) -> Tuple[defaultdict, defaultd
         tgt = formula["target"].lower()
         in_degree[tgt]  # ensure target is in in_degree
         
+        # Skip SHIFT_PCT patterns as they're handled specially (not part of regular dependency chain)
+        if formula.get("type") == "shift_pct":
+            continue
+        
         # Analyze refs for dependencies
         for ref in formula.get("refs", []):
             base, offset = parse_time_index(ref)
             ref_base = base.lower()
+            # Skip self-references for time-indexed variables
+            if ref_base == tgt:
+                continue
             if re.search(r"\[\s*t", ref):  # time-indexed
                 # For time-indexed refs, dependency is on the base variable
                 # Since offsets affect order, we note the relationship
@@ -170,14 +179,14 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     # Collect SHIFT_PCT_BACKWARDS patterns for batching
     shift_pct_backwards_patterns = []
     for p in parsed:
-        if "rhs" in p and isinstance(p.get("rhs", ""), str):
-            rhs_normalized = normalize_formula_text(p["rhs"])
-            msp = _shift_pct_re.match(rhs_normalized)
-            if msp and "t+" in rhs_normalized:
-                ser1 = msp.group(1)
-                offs1 = int(msp.group(2))
-                ser2 = msp.group(3)
-                shift_pct_backwards_patterns.append((p["target"], ser1, ser2, offs1))
+        # Check if it's a shift_pct type with positive offset (backwards pattern)
+        if p.get("type") == "shift_pct":
+            offset = p.get("offset", 0)
+            if offset > 0:
+                ser1 = p.get("ser1")
+                ser2 = p.get("ser2")
+                target = p.get("target")
+                shift_pct_backwards_patterns.append((target, ser1, ser2, offset))
 
     lines: List[str] = []
     lines.append('"""Auto-generated ts_transformer module - applies transformations from formulas"""')
@@ -257,12 +266,11 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     cols.append(f'        CHAIN(price_quantity_pairs=[{pairs_str}], date_col=pl.col("DATE"), year="{formula.get("year","")}").alias("{tgt_alias}")')
                     continue
 
-                # exact SHIFT_PCT pattern detection with normalized RHS
-                msp = _shift_pct_re.match(rhs_normalized)
-                if msp:
-                    ser1 = msp.group(1)
-                    offs1 = int(msp.group(2))
-                    ser2 = msp.group(3)
+                # exact SHIFT_PCT pattern detection
+                if formula.get("type") == "shift_pct":
+                    ser1 = formula.get("ser1")
+                    ser2 = formula.get("ser2")
+                    offs1 = formula.get("offset", 0)
                     ser1_col = sanitize_func_name(ser1).upper()
                     ser2_col = sanitize_func_name(ser2).upper()
                     # Check if it's backwards (positive offset)
@@ -277,22 +285,27 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 # if RHS contains special markers, render with render_polars_expr
                 if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase("]):
                     subs: Dict[str, str] = {}
+                    # Build substitution map, but skip function names
+                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
                     for t in TOKEN_RE.findall(rhs_text):
                         key = t.lower()
                         if key == "t":
                             continue
                         if _is_numeric_literal(t):
                             continue
+                        if key in function_names:
+                            continue  # Skip function names - they'll be handled by render_polars_expr
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                     expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
                     cols.append(f"        ({expr_text}).alias('{tgt_alias}')")
                     continue
 
-                # assign-series single token
-                m_assign = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*([A-Za-z0-9_$.]+)\s*$", rhs_text)
+                # assign-series single token (including time-indexed tokens like v2[t+1])
+                # Check if RHS is a single token (possibly with time index)
+                m_assign = re.match(r"^\s*([A-Za-z0-9_$.]+(?:\s*\[\s*t\s*[+-]?\d*\s*\])?)\s*$", rhs_text)
                 if m_assign:
-                    src_tok = m_assign.group(2)
+                    src_tok = m_assign.group(1)
                     src_expr = _operand_to_pl(src_tok)
                     cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {src_expr})')
                     continue
@@ -319,11 +332,14 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         continue
                     # mixed -> render polars expr and alias
                     subs: Dict[str, str] = {}
+                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
                     for t in TOKEN_RE.findall(rhs_text):
                         key = t.lower()
                         if key == "t":
                             continue
                         if _is_numeric_literal(t):
+                            continue
+                        if key in function_names:
                             continue
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
@@ -333,11 +349,14 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
 
                 # fallback: render and alias
                 subs: Dict[str, str] = {}
+                function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
                 for t in TOKEN_RE.findall(rhs_text):
                     key = t.lower()
                     if key == "t":
                         continue
                     if _is_numeric_literal(t):
+                        continue
+                    if key in function_names:
                         continue
                     subs[key] = _operand_to_pl(t)
                 expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
