@@ -32,6 +32,7 @@ Fame2PyGen processes a list of FAME commands and generates three Python files:
 - Arithmetic operations (`v1 = v2 + v3 - v4`)
 - Time-indexed variables (`v1[t+1]`)
 - Point-in-time (date-indexed) assignments (`gdp["2020-01-01"] = 1000`, `cpi["2020Q1"] = 105.5`)
+- **Conditional expressions** (`result = if v1 gt 100 then v2 * 2 else nd`)
 - Chain operations (`$chain("a-b", "2020")`)
 - PCT functions (`pct(v1[t+1])`)
 - Special SHIFT_PCT patterns (forward and backward calculations)
@@ -132,6 +133,56 @@ commands = [
     "v1 = convert(v2, 'm', 'b', 'avg', 'end')",  # Convert monthly to business day
 ]
 ```
+
+### Conditional Expressions Support
+
+Fame2PyGen supports FAME-style conditional logic with automatic translation to Polars `.when().then().otherwise()` expressions:
+
+**Syntax**: `variable = if <condition> then <then_expr> else <else_expr>`
+
+**Supported comparison operators**:
+- `ge` - greater than or equal (>=)
+- `gt` - greater than (>)
+- `le` - less than or equal (<=)
+- `lt` - less than (<)
+- `eq` - equal (==)
+- `ne` - not equal (!=)
+
+**Special keyword**:
+- `nd` - null/missing value (maps to `pl.lit(None)`)
+
+**Examples:**
+```python
+commands = [
+    "freq m",
+    "base = 100",
+    "threshold = 150",
+    
+    # Simple conditional
+    "result1 = if base gt 100 then base * 2 else nd",
+    
+    # Conditional with multiple variables
+    "result2 = if threshold ge 150 then base * 1.5 else base",
+    
+    # Complex expressions in branches
+    "price = 50",
+    "quantity = 10", 
+    "total = if price lt 100 then price * quantity else price * quantity * 1.1",
+]
+```
+
+**Generated Polars code:**
+```python
+pdf = pdf.with_columns([
+    pl.when(pl.col("BASE") > 100).then(pl.col("BASE") * 2).otherwise(pl.lit(None)).alias("RESULT1"),
+    pl.when(pl.col("THRESHOLD") >= 150).then(pl.col("BASE") * 1.5).otherwise(pl.col("BASE")).alias("RESULT2"),
+    pl.when(pl.col("PRICE") < 100).then(pl.col("PRICE") * pl.col("QUANTITY")).otherwise(pl.col("PRICE") * pl.col("QUANTITY") * 1.1).alias("TOTAL")
+])
+```
+
+**Note on FAME date functions**: Complex FAME date functions like `dateof()`, `make()`, `date()`, `contain()`, and `end()` are currently preserved in the condition as-is and may require manual review and implementation. The conditional structure itself is fully supported.
+
+For a complete example, see [examples/conditional_expression_example.py](examples/conditional_expression_example.py).
 
 ### Usage Example
 
