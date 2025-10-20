@@ -31,6 +31,7 @@ Fame2PyGen processes a list of FAME commands and generates three Python files:
 - Simple assignments (`vbot = 1`)
 - Arithmetic operations (`v1 = v2 + v3 - v4`)
 - Time-indexed variables (`v1[t+1]`)
+- Point-in-time (date-indexed) assignments (`gdp["2020-01-01"] = 1000`, `cpi["2020Q1"] = 105.5`)
 - Chain operations (`$chain("a-b", "2020")`)
 - PCT functions (`pct(v1[t+1])`)
 - Special SHIFT_PCT patterns (forward and backward calculations)
@@ -56,6 +57,32 @@ commands = [
     "date *",
     "v4 = v5 + v6",  # Affects all dates
 ]
+```
+
+### Point-in-Time Assignment Support
+
+Fame2PyGen supports FAME-style point-in-time (date-indexed) assignments for setting specific values at particular dates in a time series:
+
+- **`var["YYYY-MM-DD"] = value`**: Assign a value to a specific date
+- **`var["YYYYQN"] = value`**: Assign a value to a specific quarter (e.g., "2020Q1")
+
+The generator translates these to Polars operations that filter and update specific rows based on the date.
+
+**Examples:**
+```python
+commands = [
+    'gdp["2020-01-01"] = 1000',              # Set gdp to 1000 on Jan 1, 2020
+    'cpi["2020Q1"] = 105.5',                  # Set cpi to 105.5 for Q1 2020
+    'adjusted["2020-01-01"] = gdp["2019-12-31"] * 1.05',  # Reference other dates
+]
+```
+
+**Generated Polars code:**
+```python
+pdf = POINT_IN_TIME_ASSIGN(pdf, "GDP", "2020-01-01", pl.lit(1000))
+pdf = POINT_IN_TIME_ASSIGN(pdf, "CPI", "2020Q1", pl.lit(105.5))
+pdf = POINT_IN_TIME_ASSIGN(pdf, "ADJUSTED", "2020-01-01", 
+    lambda df: df.filter(pl.col("DATE") == "2019-12-31").select(pl.col("GDP")).item() * 1.05)
 ```
 
 ### Frequency Support

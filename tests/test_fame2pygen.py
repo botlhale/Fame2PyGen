@@ -168,5 +168,91 @@ def test_business_day_frequency_with_convert():
         if os.path.exists(ts_file):
             os.unlink(ts_file)
 
+def test_point_in_time_assignment_simple():
+    """Test parsing of simple point-in-time assignment with date string."""
+    result = parse_fame_formula('gdp["2020-01-01"] = 100')
+    assert result["type"] == "point_in_time_assign"
+    assert result["target"] == "gdp"
+    assert result["date"] == "2020-01-01"
+    assert result["rhs"] == "100"
+
+def test_point_in_time_assignment_quarterly():
+    """Test parsing of point-in-time assignment with quarterly date."""
+    result = parse_fame_formula("cpi['2020Q1'] = 105.5")
+    assert result["type"] == "point_in_time_assign"
+    assert result["target"] == "cpi"
+    assert result["date"] == "2020Q1"
+    assert result["rhs"] == "105.5"
+
+def test_point_in_time_assignment_expression():
+    """Test parsing of point-in-time assignment with expression on RHS."""
+    result = parse_fame_formula('gdp["2020-01-01"] = gdp["2019-12-31"] * 1.05')
+    assert result["type"] == "point_in_time_assign"
+    assert result["target"] == "gdp"
+    assert result["date"] == "2020-01-01"
+    assert "gdp" in result["refs"]
+
+def test_point_in_time_assignment_with_variable():
+    """Test parsing of point-in-time assignment with variable reference."""
+    result = parse_fame_formula('v1["2020-01-01"] = v2 + 10')
+    assert result["type"] == "point_in_time_assign"
+    assert result["target"] == "v1"
+    assert result["date"] == "2020-01-01"
+    assert "v2" in result["refs"]
+
+def test_point_in_time_generate_functions():
+    """Test that point-in-time assignments trigger function generation."""
+    cmds = ['gdp["2020-01-01"] = 100', 'cpi["2020Q1"] = 105.5']
+    defs = generate_polars_functions(cmds)
+    assert "POINT_IN_TIME_ASSIGN" in defs
+
 if __name__ == "__main__":
     pytest.main()
+
+def test_point_in_time_code_generation():
+    """Test that point-in-time assignments generate correct code."""
+    from fame2pygen.fame2py_converter import generate_formulas_file, generate_test_script
+    import tempfile
+    import os
+    
+    cmds = [
+        'freq m',
+        'gdp["2020-01-01"] = 1000',
+        'cpi["2020Q1"] = 105.5',
+        'adjusted["2020-01-01"] = gdp["2019-12-31"] * 1.05'
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        formulas_file = f.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        ts_file = f.name
+    
+    try:
+        # Generate files
+        generate_formulas_file(cmds, formulas_file)
+        generate_test_script(cmds, ts_file)
+        
+        # Read generated files
+        with open(formulas_file, 'r') as f:
+            formulas_content = f.read()
+        with open(ts_file, 'r') as f:
+            ts_content = f.read()
+        
+        # Verify POINT_IN_TIME_ASSIGN function is included
+        assert "POINT_IN_TIME_ASSIGN" in formulas_content
+        assert "def POINT_IN_TIME_ASSIGN" in formulas_content
+        
+        # Verify the transformer calls POINT_IN_TIME_ASSIGN
+        assert 'POINT_IN_TIME_ASSIGN(pdf, "GDP", "2020-01-01", pl.lit(1000))' in ts_content
+        assert 'POINT_IN_TIME_ASSIGN(pdf, "CPI", "2020Q1", pl.lit(105.5))' in ts_content
+        assert 'POINT_IN_TIME_ASSIGN(pdf, "ADJUSTED"' in ts_content
+        
+        # Verify code compiles
+        compile(formulas_content, formulas_file, 'exec')
+        compile(ts_content, ts_file, 'exec')
+        
+    finally:
+        if os.path.exists(formulas_file):
+            os.unlink(formulas_file)
+        if os.path.exists(ts_file):
+            os.unlink(ts_file)

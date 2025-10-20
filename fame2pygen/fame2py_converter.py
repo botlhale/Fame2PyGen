@@ -16,9 +16,11 @@ from .formulas_generator import (
     generate_polars_functions,
     sanitize_func_name,
     parse_time_index,
+    parse_date_index,
     render_polars_expr,
     _token_to_pl_expr,
     _is_numeric_literal,
+    _is_strict_number,
     TOKEN_RE,
     _shift_pct_re,
     normalize_formula_text,
@@ -170,7 +172,17 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
         np["original_order"] = idx
         parsed.append(np)
 
-    formulas = {p["target"]: p for p in parsed if "target" in p}
+    # Build formulas dict - for point-in-time assignments, use target+date as key
+    # to avoid overwriting multiple assignments to the same variable at different dates
+    formulas = {}
+    for p in parsed:
+        if "target" in p:
+            if p.get("type") == "point_in_time_assign":
+                # Use target+date as key for uniqueness
+                key = f"{p['target']}@{p.get('date', '')}"
+                formulas[key] = p
+            else:
+                formulas[p["target"]] = p
     
     # Enhanced dependency analysis
     adj, indeg = analyze_dependencies(parsed)
@@ -189,12 +201,14 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 shift_pct_backwards_patterns.append((target, ser1, ser2, offset))
 
     lines: List[str] = []
-    lines.append('"""Auto-generated ts_transformer module - applies transformations from formulas"""')
-    lines.append("import polars as pl")
-    lines.append("from typing import List, Tuple")
+    lines.append('"""Auto-generated ts_transformer module - applies transformations from formulas"""\n')
+    lines.append("import polars as pl\n")
+    lines.append("from typing import List, Tuple\n")
+    lines.append("from datetime import date\n")
     lines.append("from formulas import *\n")
-    lines.append("def ts_transformer(pdf: pl.DataFrame) -> pl.DataFrame:")
-    lines.append('    """Apply transformations and return augmented DataFrame."""')
+    lines.append("\n")
+    lines.append("def ts_transformer(pdf: pl.DataFrame) -> pl.DataFrame:\n")
+    lines.append('    """Apply transformations and return augmented DataFrame."""\n')
     
     # Track the current date filter state to add as comments
     current_filter_state = None
@@ -203,15 +217,24 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     if shift_pct_backwards_patterns:
         column_pairs = [(tgt.upper(), pct.upper()) for tgt, ser1, pct, _ in shift_pct_backwards_patterns]
         offsets = [offs for _, _, _, offs in shift_pct_backwards_patterns]
-        lines.append("    # Batch SHIFT_PCT_BACKWARDS calculations")
-        lines.append(f"    pdf = SHIFT_PCT_BACKWARDS_MULTIPLE(pdf, \"2016-12-31\", \"1981-03-31\", {column_pairs}, offsets={offsets})")
+        lines.append("    # Batch SHIFT_PCT_BACKWARDS calculations\n")
+        lines.append(f"    pdf = SHIFT_PCT_BACKWARDS_MULTIPLE(pdf, \"2016-12-31\", \"1981-03-31\", {column_pairs}, offsets={offsets})\n")
 
     for level_idx, level in enumerate(levels):
         if not level:
             continue
         
         # Sort commands in this level by original order to preserve date filter transitions
-        level_formulas = [(tgt, formulas[tgt]) for tgt in level if tgt in formulas]
+        # For point-in-time assignments, find all formulas keys that start with target name
+        level_formulas = []
+        for tgt in level:
+            # Check for exact match (regular assignment)
+            if tgt in formulas:
+                level_formulas.append((tgt, formulas[tgt]))
+            # Check for point-in-time assignments (key format: target@date)
+            for key, formula in formulas.items():
+                if '@' in key and key.startswith(tgt + '@'):
+                    level_formulas.append((key, formula))
         level_formulas.sort(key=lambda x: x[1].get("original_order", 0))
         
         # Group by date filter within this level
@@ -236,11 +259,11 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
         for group_filter, group_targets in groups:
             # Add comment for date filter state
             if group_filter is None:
-                lines.append("    # Date filter: * (all dates)")
+                lines.append("    # Date filter: * (all dates)\n")
             else:
-                lines.append(f"    # Date filter: {group_filter['start']} to {group_filter['end']}")
+                lines.append(f"    # Date filter: {group_filter['start']} to {group_filter['end']}\n")
             
-            lines.append(f"    # --- Level {level_idx + 1}: compute {', '.join(group_targets)} ---")
+            lines.append(f"    # --- Level {level_idx + 1}: compute {', '.join(group_targets)} ---\n")
             cols: List[str] = []
             
             for tgt in group_targets:
@@ -280,6 +303,97 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     else:
                         # Forward SHIFT_PCT
                         cols.append(f'        SHIFT_PCT(pl.col("{ser1_col}"), pl.col("{ser2_col}"), {offs1}).alias("{tgt_alias}")')
+                    continue
+
+                # point-in-time assignment handling
+                if formula.get("type") == "point_in_time_assign":
+                    date_str = formula.get("date")
+                    rhs = formula.get("rhs", "")
+                    # Check if RHS is a simple numeric literal
+                    if _is_strict_number(rhs.strip()):
+                        # Simple numeric value - use pl.lit()
+                        expr_text = f"pl.lit({rhs.strip()})"
+                    else:
+                        # Check if RHS contains date-indexed references
+                        has_date_indexed = False
+                        for tok_match in TOKEN_RE.finditer(rhs):
+                            tok = tok_match.group(0)
+                            base, date_idx = parse_date_index(tok)
+                            if base:
+                                has_date_indexed = True
+                                break
+                        
+                        if has_date_indexed:
+                            # Build a lambda that extracts values at specific dates
+                            # Convert each date-indexed token to a filter + extraction
+                            expr_parts = []
+                            last_pos = 0
+                            for tok_match in TOKEN_RE.finditer(rhs):
+                                tok = tok_match.group(0)
+                                start, end = tok_match.span()
+                                # Add text before this token
+                                expr_parts.append(rhs[last_pos:start])
+                                
+                                base, date_idx = parse_date_index(tok)
+                                if base:
+                                    # Replace with expression that extracts value at specific date
+                                    base_col = sanitize_func_name(base).upper()
+                                    # Parse date and create proper date object in the lambda
+                                    # Convert date_str to Python date() constructor
+                                    import re as _re_mod
+                                    try:
+                                        # Try YYYY-MM-DD format
+                                        from datetime import datetime as _dt
+                                        parsed_date = _dt.strptime(date_idx, '%Y-%m-%d').date()
+                                        date_expr = f"date({parsed_date.year}, {parsed_date.month}, {parsed_date.day})"
+                                    except ValueError:
+                                        # Try YYYYQN format
+                                        m = _re_mod.match(r'^(\d{4})Q([1-4])$', date_idx, _re_mod.IGNORECASE)
+                                        if m:
+                                            year = int(m.group(1))
+                                            quarter = int(m.group(2))
+                                            month = (quarter - 1) * 3 + 1
+                                            date_expr = f"date({year}, {month}, 1)"
+                                        else:
+                                            # Fallback - use string
+                                            date_expr = f'"{date_idx}"'
+                                    # Use filter and item() to extract the value
+                                    date_filter_expr = f'df.filter(pl.col("DATE") == {date_expr}).select(pl.col("{base_col}")).item()'
+                                    expr_parts.append(date_filter_expr)
+                                else:
+                                    # Regular token - convert to pl.col()
+                                    if not _is_numeric_literal(tok) and tok.lower() != "t":
+                                        col_name = sanitize_func_name(tok).upper()
+                                        expr_parts.append(f'pl.col("{col_name}")')
+                                    else:
+                                        expr_parts.append(tok)
+                                
+                                last_pos = end
+                            
+                            # Add remaining text
+                            expr_parts.append(rhs[last_pos:])
+                            expr_body = "".join(expr_parts)
+                            # Wrap in lambda
+                            expr_text = f"lambda df: {expr_body}"
+                        else:
+                            # No date-indexed references - normal expression
+                            subs: Dict[str, str] = {}
+                            function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
+                            for t in TOKEN_RE.finditer(rhs):
+                                tok = t.group(0)
+                                key = tok.lower()
+                                if key == "t":
+                                    continue
+                                if _is_numeric_literal(tok):
+                                    continue
+                                if key in function_names:
+                                    continue
+                                subs[key] = _operand_to_pl(tok)
+                            expr_text = render_polars_expr(rhs, substitution_map=subs, memory=None, ctx=None)
+                    
+                    # Generate POINT_IN_TIME_ASSIGN call - this needs to be outside with_columns
+                    # So we'll handle it separately after the level processing
+                    lines.append(f'    pdf = POINT_IN_TIME_ASSIGN(pdf, "{tgt_alias}", "{date_str}", {expr_text})\n')
                     continue
 
                 # if RHS contains special markers, render with render_polars_expr

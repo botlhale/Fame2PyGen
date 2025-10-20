@@ -63,3 +63,20 @@ future_growth = pct(a[t+1])
 
 # Complex expression combining time shifts and PCT function
 set vbots[t] = vbots[t+1]/(1+(pct(v23s[t+1])/100))
+
+# Point-in-time (date-indexed) assignment examples
+# Simple value assignment to a specific date
+gdp["2020-01-01"] = 1000
+cpi["2020-01-01"] = 100
+
+# Quarterly date assignment
+inflation["2020Q1"] = 2.5
+
+# Assignment with expression on RHS
+gdp["2020-02-01"] = gdp["2020-01-01"] * 1.01
+
+# Point-in-time assignment using other variables
+adjusted_cpi["2020-01-01"] = cpi["2020-01-01"] * 1.05
+
+# Assignment with arithmetic expression
+combined["2020-01-01"] = gdp["2020-01-01"] + cpi["2020-01-01"] * 10
