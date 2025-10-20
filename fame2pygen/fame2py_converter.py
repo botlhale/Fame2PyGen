@@ -172,7 +172,17 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
         np["original_order"] = idx
         parsed.append(np)
 
-    formulas = {p["target"]: p for p in parsed if "target" in p}
+    # Build formulas dict - for point-in-time assignments, use target+date as key
+    # to avoid overwriting multiple assignments to the same variable at different dates
+    formulas = {}
+    for p in parsed:
+        if "target" in p:
+            if p.get("type") == "point_in_time_assign":
+                # Use target+date as key for uniqueness
+                key = f"{p['target']}@{p.get('date', '')}"
+                formulas[key] = p
+            else:
+                formulas[p["target"]] = p
     
     # Enhanced dependency analysis
     adj, indeg = analyze_dependencies(parsed)
@@ -194,6 +204,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     lines.append('"""Auto-generated ts_transformer module - applies transformations from formulas"""\n')
     lines.append("import polars as pl\n")
     lines.append("from typing import List, Tuple\n")
+    lines.append("from datetime import date\n")
     lines.append("from formulas import *\n")
     lines.append("\n")
     lines.append("def ts_transformer(pdf: pl.DataFrame) -> pl.DataFrame:\n")
@@ -214,7 +225,16 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             continue
         
         # Sort commands in this level by original order to preserve date filter transitions
-        level_formulas = [(tgt, formulas[tgt]) for tgt in level if tgt in formulas]
+        # For point-in-time assignments, find all formulas keys that start with target name
+        level_formulas = []
+        for tgt in level:
+            # Check for exact match (regular assignment)
+            if tgt in formulas:
+                level_formulas.append((tgt, formulas[tgt]))
+            # Check for point-in-time assignments (key format: target@date)
+            for key, formula in formulas.items():
+                if '@' in key and key.startswith(tgt + '@'):
+                    level_formulas.append((key, formula))
         level_formulas.sort(key=lambda x: x[1].get("original_order", 0))
         
         # Group by date filter within this level
@@ -318,8 +338,27 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                                 if base:
                                     # Replace with expression that extracts value at specific date
                                     base_col = sanitize_func_name(base).upper()
+                                    # Parse date and create proper date object in the lambda
+                                    # Convert date_str to Python date() constructor
+                                    import re as _re_mod
+                                    try:
+                                        # Try YYYY-MM-DD format
+                                        from datetime import datetime as _dt
+                                        parsed_date = _dt.strptime(date_idx, '%Y-%m-%d').date()
+                                        date_expr = f"date({parsed_date.year}, {parsed_date.month}, {parsed_date.day})"
+                                    except ValueError:
+                                        # Try YYYYQN format
+                                        m = _re_mod.match(r'^(\d{4})Q([1-4])$', date_idx, _re_mod.IGNORECASE)
+                                        if m:
+                                            year = int(m.group(1))
+                                            quarter = int(m.group(2))
+                                            month = (quarter - 1) * 3 + 1
+                                            date_expr = f"date({year}, {month}, 1)"
+                                        else:
+                                            # Fallback - use string
+                                            date_expr = f'"{date_idx}"'
                                     # Use filter and item() to extract the value
-                                    date_filter_expr = f'df.filter(pl.col("DATE") == "{date_idx}").select(pl.col("{base_col}")).item()'
+                                    date_filter_expr = f'df.filter(pl.col("DATE") == {date_expr}).select(pl.col("{base_col}")).item()'
                                     expr_parts.append(date_filter_expr)
                                 else:
                                     # Regular token - convert to pl.col()
