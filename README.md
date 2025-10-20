@@ -35,6 +35,27 @@ Fame2PyGen processes a list of FAME commands and generates three Python files:
 - PCT functions (`pct(v1[t+1])`)
 - Special SHIFT_PCT patterns (forward and backward calculations)
 - Convert and Fishvol functions
+- Date filtering commands (`date 2020-01-01 to 2020-12-31`, `date *`)
+
+### Date Filtering Support
+
+Fame2PyGen now supports FAME-style date filtering commands:
+
+- **`date <start> to <end>`**: Sets a date range filter for subsequent operations
+- **`date *`**: Disables date filtering, applying operations to all dates
+
+The generator tracks date filter state and adds comments to the generated code indicating which operations are affected by date filters. This allows for proper code review and future implementation of actual filtering logic.
+
+Example:
+```python
+commands = [
+    "freq m",
+    "date 2020-01-01 to 2020-12-31",
+    "v1 = v2 + v3",  # Only affects dates in 2020
+    "date *",
+    "v4 = v5 + v6",  # Affects all dates
+]
+```
 
 ### Usage Example
 

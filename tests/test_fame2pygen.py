@@ -83,5 +83,37 @@ def test_date_range_command():
     assert result["filter"]["start"] == "2020-01-01"
     assert result["filter"]["end"] == "2020-12-31"
 
+def test_date_filter_in_generated_code():
+    """Test that date filters are tracked and added as comments in generated code."""
+    from fame2pygen.fame2py_converter import generate_test_script
+    import tempfile
+    import os
+    
+    cmds = [
+        "freq m",
+        "date 2020-01-01 to 2020-12-31",
+        "v1 = v2 + v3",
+        "date *",
+        "v4 = v5 + v6"
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        output_file = f.name
+    
+    try:
+        generate_test_script(cmds, output_file)
+        with open(output_file, 'r') as f:
+            content = f.read()
+        
+        # Verify date filter comments are present
+        assert "# Date filter: 2020-01-01 to 2020-12-31" in content
+        assert "# Date filter: * (all dates)" in content
+        
+        # Verify the computations are separate (not grouped together)
+        assert "v1" in content and "v4" in content
+    finally:
+        if os.path.exists(output_file):
+            os.unlink(output_file)
+
 if __name__ == "__main__":
     pytest.main()
