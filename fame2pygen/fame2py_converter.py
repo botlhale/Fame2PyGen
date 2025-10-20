@@ -139,13 +139,26 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             f.write(content)
         return out_filename
 
+    # Track date filter state across commands and preserve order
+    current_date_filter = None  # None means no filtering (all dates)
+    
     parsed = []
-    for p in parsed_raw:
+    for idx, p in enumerate(parsed_raw):
         np = p.copy()
+        
+        # Handle date commands
+        if np.get("type") == "date":
+            current_date_filter = np.get("filter")
+            continue  # Don't include date commands in the parsed list
+            
         if "target" in np:
             np["target"] = np["target"].lower()
         if "refs" in np:
             np["refs"] = [r.lower() for r in np["refs"]]
+        
+        # Track the date filter for this command and preserve original order
+        np["date_filter"] = current_date_filter
+        np["original_order"] = idx
         parsed.append(np)
 
     formulas = {p["target"]: p for p in parsed if "target" in p}
@@ -173,6 +186,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     lines.append("from formulas import *\n")
     lines.append("def ts_transformer(pdf: pl.DataFrame) -> pl.DataFrame:")
     lines.append('    """Apply transformations and return augmented DataFrame."""')
+    
+    # Track the current date filter state to add as comments
+    current_filter_state = None
 
     # Handle multiple SHIFT_PCT_BACKWARDS at the beginning
     if shift_pct_backwards_patterns:
@@ -184,92 +200,138 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     for level_idx, level in enumerate(levels):
         if not level:
             continue
-        lines.append(f"    # --- Level {level_idx + 1}: compute {', '.join(level)} ---")
-        cols: List[str] = []
-        for tgt in level:
-            formula = formulas[tgt]
-            tgt_alias = sanitize_func_name(formula["target"]).upper()
-            rhs_text = (formula.get("rhs") or "").strip()
-            rhs_normalized = normalize_formula_text(rhs_text)
-            rhs_lower = rhs_normalized.lower()
+        
+        # Sort commands in this level by original order to preserve date filter transitions
+        level_formulas = [(tgt, formulas[tgt]) for tgt in level if tgt in formulas]
+        level_formulas.sort(key=lambda x: x[1].get("original_order", 0))
+        
+        # Group by date filter within this level
+        groups = []
+        current_group = []
+        current_group_filter = None
+        
+        for tgt, formula in level_formulas:
+            formula_filter = formula.get("date_filter")
+            if formula_filter != current_group_filter:
+                if current_group:
+                    groups.append((current_group_filter, current_group))
+                current_group = [tgt]
+                current_group_filter = formula_filter
+            else:
+                current_group.append(tgt)
+        
+        if current_group:
+            groups.append((current_group_filter, current_group))
+        
+        # Generate code for each group
+        for group_filter, group_targets in groups:
+            # Add comment for date filter state
+            if group_filter is None:
+                lines.append("    # Date filter: * (all dates)")
+            else:
+                lines.append(f"    # Date filter: {group_filter['start']} to {group_filter['end']}")
+            
+            lines.append(f"    # --- Level {level_idx + 1}: compute {', '.join(group_targets)} ---")
+            cols: List[str] = []
+            
+            for tgt in group_targets:
+                formula = formulas[tgt]
+                tgt_alias = sanitize_func_name(formula["target"]).upper()
+                rhs_text = (formula.get("rhs") or "").strip()
+                rhs_normalized = normalize_formula_text(rhs_text)
+                rhs_lower = rhs_normalized.lower()
 
-            # Skip if already handled in batch
-            if any(tgt == tgt_from_pattern for tgt_from_pattern, _, _, _ in shift_pct_backwards_patterns):
-                continue
-
-            # parsed chain/mchain handling
-            if formula.get("type") in ("chain", "mchain"):
-                pair_items = []
-                for op, var in formula.get("terms", []):
-                    sign = "-" if op == "-" else ""
-                    pcol = sanitize_func_name("p" + var).upper()
-                    vcol = sanitize_func_name(var).upper()
-                    pair_items.append(f"({sign}pl.col('{pcol}'), pl.col('{vcol}'))")
-                pairs_str = ", ".join(pair_items)
-                cols.append(f'        CHAIN(price_quantity_pairs=[{pairs_str}], date_col=pl.col("DATE"), year="{formula.get("year","")}").alias("{tgt_alias}")')
-                continue
-
-            # exact SHIFT_PCT pattern detection with normalized RHS
-            msp = _shift_pct_re.match(rhs_normalized)
-            if msp:
-                ser1 = msp.group(1)
-                offs1 = int(msp.group(2))
-                ser2 = msp.group(3)
-                ser1_col = sanitize_func_name(ser1).upper()
-                ser2_col = sanitize_func_name(ser2).upper()
-                # Check if it's backwards (positive offset)
-                if offs1 > 0:
-                    # Already handled in batch
+                # Skip if already handled in batch
+                if any(tgt == tgt_from_pattern for tgt_from_pattern, _, _, _ in shift_pct_backwards_patterns):
                     continue
-                else:
-                    # Forward SHIFT_PCT
-                    cols.append(f'        SHIFT_PCT(pl.col("{ser1_col}"), pl.col("{ser2_col}"), {offs1}).alias("{tgt_alias}")')
-                continue
 
-            # if RHS contains special markers, render with render_polars_expr
-            if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase("]):
-                subs: Dict[str, str] = {}
-                for t in TOKEN_RE.findall(rhs_text):
-                    key = t.lower()
-                    if key == "t":
+                # parsed chain/mchain handling
+                if formula.get("type") in ("chain", "mchain"):
+                    pair_items = []
+                    for op, var in formula.get("terms", []):
+                        sign = "-" if op == "-" else ""
+                        pcol = sanitize_func_name("p" + var).upper()
+                        vcol = sanitize_func_name(var).upper()
+                        pair_items.append(f"({sign}pl.col('{pcol}'), pl.col('{vcol}'))")
+                    pairs_str = ", ".join(pair_items)
+                    cols.append(f'        CHAIN(price_quantity_pairs=[{pairs_str}], date_col=pl.col("DATE"), year="{formula.get("year","")}").alias("{tgt_alias}")')
+                    continue
+
+                # exact SHIFT_PCT pattern detection with normalized RHS
+                msp = _shift_pct_re.match(rhs_normalized)
+                if msp:
+                    ser1 = msp.group(1)
+                    offs1 = int(msp.group(2))
+                    ser2 = msp.group(3)
+                    ser1_col = sanitize_func_name(ser1).upper()
+                    ser2_col = sanitize_func_name(ser2).upper()
+                    # Check if it's backwards (positive offset)
+                    if offs1 > 0:
+                        # Already handled in batch
                         continue
-                    if _is_numeric_literal(t):
+                    else:
+                        # Forward SHIFT_PCT
+                        cols.append(f'        SHIFT_PCT(pl.col("{ser1_col}"), pl.col("{ser2_col}"), {offs1}).alias("{tgt_alias}")')
+                    continue
+
+                # if RHS contains special markers, render with render_polars_expr
+                if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase("]):
+                    subs: Dict[str, str] = {}
+                    for t in TOKEN_RE.findall(rhs_text):
+                        key = t.lower()
+                        if key == "t":
+                            continue
+                        if _is_numeric_literal(t):
+                            continue
+                        subs[key] = _operand_to_pl(t)
+                    expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
+                    expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
+                    cols.append(f"        ({expr_text}).alias('{tgt_alias}')")
+                    continue
+
+                # assign-series single token
+                m_assign = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*([A-Za-z0-9_$.]+)\s*$", rhs_text)
+                if m_assign:
+                    src_tok = m_assign.group(2)
+                    src_expr = _operand_to_pl(src_tok)
+                    cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {src_expr})')
+                    continue
+
+                # arithmetic detection
+                operands, ops = _collect_operands_and_ops(rhs_normalized)
+                if ops:
+                    unique_ops = set(ops)
+                    if unique_ops == {"+"}:
+                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
+                        cols.append(f'        ADD_SERIES("{tgt_alias}", {args})')
                         continue
-                    subs[key] = _operand_to_pl(t)
-                expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
-                expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-                cols.append(f"        ({expr_text}).alias('{tgt_alias}')")
-                continue
+                    if unique_ops == {"-"}:
+                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
+                        cols.append(f'        SUB_SERIES("{tgt_alias}", {args})')
+                        continue
+                    if unique_ops == {"*"}:
+                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
+                        cols.append(f'        MUL_SERIES("{tgt_alias}", {args})')
+                        continue
+                    if unique_ops == {"/"}:
+                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
+                        cols.append(f'        DIV_SERIES("{tgt_alias}", {args})')
+                        continue
+                    # mixed -> render polars expr and alias
+                    subs: Dict[str, str] = {}
+                    for t in TOKEN_RE.findall(rhs_text):
+                        key = t.lower()
+                        if key == "t":
+                            continue
+                        if _is_numeric_literal(t):
+                            continue
+                        subs[key] = _operand_to_pl(t)
+                    expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
+                    expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
+                    cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {expr_text})')
+                    continue
 
-            # assign-series single token
-            m_assign = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*([A-Za-z0-9_$.]+)\s*$", rhs_text)
-            if m_assign:
-                src_tok = m_assign.group(2)
-                src_expr = _operand_to_pl(src_tok)
-                cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {src_expr})')
-                continue
-
-            # arithmetic detection
-            operands, ops = _collect_operands_and_ops(rhs_normalized)
-            if ops:
-                unique_ops = set(ops)
-                if unique_ops == {"+"}:
-                    args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                    cols.append(f'        ADD_SERIES("{tgt_alias}", {args})')
-                    continue
-                if unique_ops == {"-"}:
-                    args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                    cols.append(f'        SUB_SERIES("{tgt_alias}", {args})')
-                    continue
-                if unique_ops == {"*"}:
-                    args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                    cols.append(f'        MUL_SERIES("{tgt_alias}", {args})')
-                    continue
-                if unique_ops == {"/"}:
-                    args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                    cols.append(f'        DIV_SERIES("{tgt_alias}", {args})')
-                    continue
-                # mixed -> render polars expr and alias
+                # fallback: render and alias
                 subs: Dict[str, str] = {}
                 for t in TOKEN_RE.findall(rhs_text):
                     key = t.lower()
@@ -281,23 +343,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                 expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
                 cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {expr_text})')
-                continue
 
-            # fallback: render and alias
-            subs: Dict[str, str] = {}
-            for t in TOKEN_RE.findall(rhs_text):
-                key = t.lower()
-                if key == "t":
-                    continue
-                if _is_numeric_literal(t):
-                    continue
-                subs[key] = _operand_to_pl(t)
-            expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
-            expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-            cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {expr_text})')
-
-        if cols:
-            lines.append("    pdf = pdf.with_columns([\n" + ",\n".join(cols) + "\n    ])\n")
+            if cols:
+                lines.append("    pdf = pdf.with_columns([\n" + ",\n".join(cols) + "\n    ])\n")
 
     lines.append("    return pdf\n")
     content = "".join(lines)

@@ -366,7 +366,17 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     if m_freq:
         return {"type": "freq", "freq": m_freq.group(1).lower()}
 
-    # 4) convert
+    # 4) date command - handles both "date *" and "date <start> to <end>"
+    m_date_all = re.match(r"^\s*date\s+\*\s*$", s, re.IGNORECASE)
+    if m_date_all:
+        return {"type": "date", "filter": None}  # None means no filtering (all dates)
+    
+    m_date_range = re.match(r"^\s*date\s+(.+?)\s+to\s+(.+?)\s*$", s, re.IGNORECASE)
+    if m_date_range:
+        start_date, end_date = m_date_range.groups()
+        return {"type": "date", "filter": {"start": start_date.strip(), "end": end_date.strip()}}
+
+    # 5) convert
     m_convert = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*convert\((.+)\)\s*$", s, re.IGNORECASE)
     if m_convert:
         target, args_str = m_convert.groups()
@@ -374,7 +384,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         if len(args) == 4:
             return {"type": "convert", "target": target, "refs": [args[0]], "params": args}
 
-    # 5) fishvol
+    # 6) fishvol
     m_fv = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*\$?fishvol_rebase\((.+)\)(\s*[*/+-].*)?\s*$", s, re.IGNORECASE)
     if m_fv:
         target, args_str, trailing = m_fv.groups()
@@ -389,7 +399,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             variable_refs = [s for s in vols + prices if not _is_strict_number(s)]
             return {"type": "fishvol", "target": target, "refs": variable_refs, "pairs": pairs, "year": year, "trailing_op": trailing.strip() if trailing else None}
 
-    # 6) Check for SHIFT_PCT pattern explicitly
+    # 7) Check for SHIFT_PCT pattern explicitly
     msp = _shift_pct_re.match(s)
     if msp:
         ser1 = msp.group(1)
@@ -400,7 +410,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             return {"type": "shift_pct", "target": ser1, "refs": [ser1, ser2], "original_rhs": s, 
                     "ser1": ser1, "ser2": ser2, "offset": offs1}
 
-    # 7) generic assignment / arithmetic fallback
+    # 8) generic assignment / arithmetic fallback
     if "=" in s:
         lhs, rhs = s.split("=", 1)
         lhs = lhs.strip()
