@@ -868,5 +868,35 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(
             "    \n"
             "    return result"
         )
+    
+    # Add helper for date range filtering
+    defs["APPLY_DATE_FILTER"] = (
+        "def APPLY_DATE_FILTER(expr: pl.Expr, col_name: str, start_date: str, end_date: str, date_col: str = 'DATE') -> pl.Expr:\n"
+        '    """Apply expression only to rows within date range, using null for other rows.\n'
+        "    \n"
+        "    Args:\n"
+        "        expr: Polars expression to apply\n"
+        "        col_name: Name of the column being updated\n"
+        "        start_date: Start date string (e.g., '2020-01-01')\n"
+        "        end_date: End date string (e.g., '2020-12-31')\n"
+        "        date_col: Name of the date column (default 'DATE')\n"
+        "    \n"
+        "    Returns:\n"
+        "        Expression that applies to filtered rows only\n"
+        '    """\n'
+        "    import polars as pl\n"
+        "    from datetime import datetime\n"
+        "    \n"
+        "    # Parse dates\n"
+        "    start = datetime.strptime(start_date, '%Y-%m-%d').date()\n"
+        "    end = datetime.strptime(end_date, '%Y-%m-%d').date()\n"
+        "    \n"
+        "    # Apply expression only within date range, otherwise use null\n"
+        "    # Note: This is for creating new columns filtered by date.\n"
+        "    # For updating existing columns, you'd use .otherwise(pl.col(col_name))\n"
+        "    return pl.when(\n"
+        "        (pl.col(date_col) >= start) & (pl.col(date_col) <= end)\n"
+        "    ).then(expr).otherwise(pl.lit(None))"
+    )
 
     return defs

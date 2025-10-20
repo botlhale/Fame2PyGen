@@ -266,6 +266,15 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             lines.append(f"    # --- Level {level_idx + 1}: compute {', '.join(group_targets)} ---\n")
             cols: List[str] = []
             
+            # Helper function to wrap expression with date filter if needed
+            def wrap_with_date_filter(expr: str, target_col: str) -> str:
+                """Wrap expression with APPLY_DATE_FILTER if group has date filter."""
+                if group_filter is not None:
+                    start = group_filter['start']
+                    end = group_filter['end']
+                    return f'APPLY_DATE_FILTER({expr}, "{target_col}", "{start}", "{end}")'
+                return expr
+            
             for tgt in group_targets:
                 formula = formulas[tgt]
                 tgt_alias = sanitize_func_name(formula["target"]).upper()
@@ -286,7 +295,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         vcol = sanitize_func_name(var).upper()
                         pair_items.append(f"({sign}pl.col('{pcol}'), pl.col('{vcol}'))")
                     pairs_str = ", ".join(pair_items)
-                    cols.append(f'        CHAIN(price_quantity_pairs=[{pairs_str}], date_col=pl.col("DATE"), year="{formula.get("year","")}").alias("{tgt_alias}")')
+                    expr = f'CHAIN(price_quantity_pairs=[{pairs_str}], date_col=pl.col("DATE"), year="{formula.get("year","")}")'
+                    wrapped = wrap_with_date_filter(expr, tgt_alias)
+                    cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                     continue
 
                 # exact SHIFT_PCT pattern detection
@@ -302,7 +313,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         continue
                     else:
                         # Forward SHIFT_PCT
-                        cols.append(f'        SHIFT_PCT(pl.col("{ser1_col}"), pl.col("{ser2_col}"), {offs1}).alias("{tgt_alias}")')
+                        expr = f'SHIFT_PCT(pl.col("{ser1_col}"), pl.col("{ser2_col}"), {offs1})'
+                        wrapped = wrap_with_date_filter(expr, tgt_alias)
+                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                     continue
 
                 # point-in-time assignment handling
@@ -412,7 +425,8 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                     expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-                    cols.append(f"        ({expr_text}).alias('{tgt_alias}')")
+                    wrapped = wrap_with_date_filter(f"({expr_text})", tgt_alias)
+                    cols.append(f"        {wrapped}.alias('{tgt_alias}')")
                     continue
 
                 # assign-series single token (including time-indexed tokens like v2[t+1])
@@ -421,28 +435,56 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 if m_assign:
                     src_tok = m_assign.group(1)
                     src_expr = _operand_to_pl(src_tok)
-                    cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {src_expr})')
+                    # If it's a bare number, wrap it in pl.lit()
+                    if _is_numeric_literal(src_tok):
+                        src_expr = f"pl.lit({src_expr})"
+                    wrapped = wrap_with_date_filter(src_expr, tgt_alias)
+                    cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                     continue
 
                 # arithmetic detection
                 operands, ops = _collect_operands_and_ops(rhs_normalized)
                 if ops:
                     unique_ops = set(ops)
+                    
+                    # Helper to wrap numeric literals in pl.lit()
+                    def wrap_operand(opnd: str) -> str:
+                        expr = _operand_to_pl(opnd)
+                        if _is_numeric_literal(opnd):
+                            return f'pl.lit({expr})'
+                        return expr
+                    
                     if unique_ops == {"+"}:
-                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                        cols.append(f'        ADD_SERIES("{tgt_alias}", {args})')
+                        args_list = [wrap_operand(opnd) for opnd in operands]
+                        base_expr = args_list[0]
+                        for arg in args_list[1:]:
+                            base_expr = f'{base_expr} + {arg}'
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                         continue
                     if unique_ops == {"-"}:
-                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                        cols.append(f'        SUB_SERIES("{tgt_alias}", {args})')
+                        args_list = [wrap_operand(opnd) for opnd in operands]
+                        base_expr = args_list[0]
+                        for arg in args_list[1:]:
+                            base_expr = f'{base_expr} - {arg}'
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                         continue
                     if unique_ops == {"*"}:
-                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                        cols.append(f'        MUL_SERIES("{tgt_alias}", {args})')
+                        args_list = [wrap_operand(opnd) for opnd in operands]
+                        base_expr = args_list[0]
+                        for arg in args_list[1:]:
+                            base_expr = f'{base_expr} * {arg}'
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                         continue
                     if unique_ops == {"/"}:
-                        args = ", ".join(_operand_to_pl(opnd) for opnd in operands)
-                        cols.append(f'        DIV_SERIES("{tgt_alias}", {args})')
+                        args_list = [wrap_operand(opnd) for opnd in operands]
+                        base_expr = args_list[0]
+                        for arg in args_list[1:]:
+                            base_expr = f'{base_expr} / {arg}'
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                         continue
                     # mixed -> render polars expr and alias
                     subs: Dict[str, str] = {}
@@ -458,7 +500,8 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                     expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-                    cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {expr_text})')
+                    wrapped = wrap_with_date_filter(expr_text, tgt_alias)
+                    cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                     continue
 
                 # fallback: render and alias
@@ -475,7 +518,8 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     subs[key] = _operand_to_pl(t)
                 expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                 expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-                cols.append(f'        ASSIGN_SERIES("{tgt_alias}", {expr_text})')
+                wrapped = wrap_with_date_filter(expr_text, tgt_alias)
+                cols.append(f'        {wrapped}.alias("{tgt_alias}")')
 
             if cols:
                 lines.append("    pdf = pdf.with_columns([\n" + ",\n".join(cols) + "\n    ])\n")

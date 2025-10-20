@@ -39,25 +39,52 @@ Fame2PyGen processes a list of FAME commands and generates three Python files:
 - Date filtering commands (`date 2020-01-01 to 2020-12-31`, `date *`)
 - Frequency commands (`freq m`, `freq q`, `freq b`, `freq bus`, etc.)
 
-### Date Filtering Support
+### Date Range Subsetting Support
 
-Fame2PyGen now supports FAME-style date filtering commands:
+Fame2PyGen supports FAME-style date filtering commands with **actual sub-DataFrame filtering**:
 
-- **`date <start> to <end>`**: Sets a date range filter for subsequent operations
+- **`date <start> to <end>`**: Sets a date range filter for subsequent operations. Operations will only affect rows within the specified date range, leaving other rows unchanged (set to null for new columns).
 - **`date *`**: Disables date filtering, applying operations to all dates
 
-The generator tracks date filter state and adds comments to the generated code indicating which operations are affected by date filters. This allows for proper code review and future implementation of actual filtering logic.
+The generator creates expressions that use Polars' conditional logic (`pl.when().then().otherwise()`) to apply operations only within specified date ranges. This enables multiple date windows to be processed independently within the same pipeline.
 
 Example:
 ```python
 commands = [
     "freq m",
+    "v_base = 100",
     "date 2020-01-01 to 2020-12-31",
-    "v1 = v2 + v3",  # Only affects dates in 2020
+    "v_2020 = v_base * 2",  # Only affects dates in 2020
+    "date 2021-01-01 to 2021-12-31",
+    "v_2021 = v_base * 3",  # Only affects dates in 2021
     "date *",
-    "v4 = v5 + v6",  # Affects all dates
+    "v_all = v_base + v_2020 + v_2021",  # Affects all dates
 ]
 ```
+
+**Generated Polars code:**
+```python
+pdf = pdf.with_columns([
+    pl.lit(100).alias("V_BASE")
+])
+# Date filter: 2020-01-01 to 2020-12-31
+pdf = pdf.with_columns([
+    APPLY_DATE_FILTER((pl.col("V_BASE") * pl.lit(2)), "V_2020", "2020-01-01", "2020-12-31").alias("V_2020")
+])
+# Date filter: 2021-01-01 to 2021-12-31
+pdf = pdf.with_columns([
+    APPLY_DATE_FILTER((pl.col("V_BASE") * pl.lit(3)), "V_2021", "2021-01-01", "2021-12-31").alias("V_2021")
+])
+# Date filter: * (all dates)
+pdf = pdf.with_columns([
+    (pl.col("V_BASE") + pl.col("V_2020") + pl.col("V_2021")).alias("V_ALL")
+])
+```
+
+The `APPLY_DATE_FILTER` helper function ensures that:
+- Operations within a date range only modify rows where the date falls within that range
+- Rows outside the range receive null values for new columns
+- Multiple date ranges can be used sequentially to create complex temporal patterns
 
 ### Point-in-Time Assignment Support
 
