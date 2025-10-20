@@ -70,9 +70,30 @@ def parse_time_index(token: str) -> Tuple[str, int]:
     return base, offs
 
 
+def parse_date_index(token: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parse token forms with date indexing:
+      name["2020-01-01"]
+      name['2020Q1']
+      name["2020-12-31"]
+    Returns (base, date_str) where date_str is the literal date string or None if not date-indexed.
+    """
+    if not token:
+        return None, None
+    t = token.strip()
+    # Match variable name followed by date string in brackets (with either single or double quotes)
+    m = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*$', t)
+    if m:
+        base = m.group(1)
+        date_str = m.group(2)
+        return base, date_str
+    return None, None
+
+
 # ---------- Token regex and numeric heuristics ----------
 
-TOKEN_RE = re.compile(r"[A-Za-z0-9_$.]+(?:\s*\[\s*t\s*[+-]?\d+\s*\])?")
+# Match tokens including time-indexed (e.g., var[t+1]) and date-indexed (e.g., var["2020-01-01"])
+TOKEN_RE = re.compile(r'[A-Za-z0-9_$.]+(?:\s*\[\s*(?:t\s*[+-]?\d+|["\'][^"\']+["\']\s*)\])?')
 
 def _is_strict_number(tok: str) -> bool:
     return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok.strip()))
@@ -383,6 +404,34 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         start_date, end_date = m_date_range.groups()
         return {"type": "date", "filter": {"start": start_date.strip(), "end": end_date.strip()}}
 
+    # 4b) point-in-time (date-indexed) assignment - e.g., variable["2020-01-01"] = value
+    # Match patterns like: var["date"] = expr or var['date'] = expr
+    m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*=\s*(.+)\s*$', s)
+    if m_date_assign:
+        target, date_str, rhs = m_date_assign.groups()
+        # Parse RHS to extract references
+        raw = TOKEN_RE.findall(rhs)
+        refs = []
+        for tkn in raw:
+            if tkn.lower() != "t":
+                # Check if token is date-indexed
+                base, date_idx = parse_date_index(tkn)
+                if base:
+                    refs.append(base)
+                else:
+                    # Regular token - extract base if time-indexed
+                    base_tok, _ = parse_time_index(tkn)
+                    if base_tok and not _is_strict_number(base_tok):
+                        refs.append(base_tok)
+        return {
+            "type": "point_in_time_assign",
+            "target": target,
+            "date": date_str,
+            "rhs": rhs.strip(),
+            "original_rhs": rhs.strip(),
+            "refs": refs
+        }
+
     # 5) convert
     m_convert = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*convert\((.+)\)\s*$", s, re.IGNORECASE)
     if m_convert:
@@ -467,6 +516,7 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
         "need_mul_series": False,
         "need_div_series": False,
         "need_arith": False,
+        "need_point_in_time_assign": False,
     }
 
     # scan commands properly
@@ -501,6 +551,10 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
                     # Backwards if LHS is current time (t or t+0) and RHS references future time (t+N, N>0)
                     if lhs_offset == 0 and rhs_offset > 0:
                         ctx["need_shiftpct_backwards"] = True
+        
+        # point-in-time assignment pattern
+        if re.match(r'^\s*[A-Za-z0-9_$]+\s*\[\s*["\'][^"\']+["\']\s*\]\s*=\s*.+\s*$', s):
+            ctx["need_point_in_time_assign"] = True
         
         # assign-series pattern
         if re.match(r"^\s*[A-Za-z0-9_$]+\s*=\s*[A-Za-z0-9_$.]+\s*$", s):
@@ -749,6 +803,63 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(
             "    for s in series[1:]:\n"
             "        res = res / s\n"
             "    return res.alias(out_ser)"
+        )
+    
+    if ctx["need_point_in_time_assign"]:
+        defs["POINT_IN_TIME_ASSIGN"] = (
+            "def POINT_IN_TIME_ASSIGN(pdf: pl.DataFrame, target_col: str, date_str: str, value_expr, date_col: str = 'DATE') -> pl.DataFrame:\n"
+            '    """Update a specific row in a time series based on a date string.\n'
+            "    \n"
+            "    Args:\n"
+            "        pdf: Input DataFrame\n"
+            "        target_col: Name of the column to update\n"
+            "        date_str: Date string (e.g., '2020-01-01', '2020Q1')\n"
+            "        value_expr: Expression (pl.Expr) or callable to compute the new value\n"
+            "        date_col: Name of the date column (default 'DATE')\n"
+            "    \n"
+            "    Returns:\n"
+            "        DataFrame with the updated column\n"
+            '    """\n'
+            "    import polars as pl\n"
+            "    from datetime import datetime\n"
+            "    \n"
+            "    # Parse date string - support multiple formats\n"
+            "    try:\n"
+            "        # Try YYYY-MM-DD format\n"
+            "        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()\n"
+            "    except ValueError:\n"
+            "        try:\n"
+            "            # Try YYYYQN format (e.g., 2020Q1)\n"
+            "            import re\n"
+            "            m = re.match(r'^(\\d{4})Q([1-4])$', date_str, re.IGNORECASE)\n"
+            "            if m:\n"
+            "                year = int(m.group(1))\n"
+            "                quarter = int(m.group(2))\n"
+            "                month = (quarter - 1) * 3 + 1\n"
+            "                target_date = datetime(year, month, 1).date()\n"
+            "            else:\n"
+            "                raise ValueError(f'Unsupported date format: {date_str}')\n"
+            "        except:\n"
+            "            raise ValueError(f'Cannot parse date: {date_str}')\n"
+            "    \n"
+            "    # If value_expr is callable, call it with the full dataframe\n"
+            "    if callable(value_expr):\n"
+            "        value_expr = value_expr(pdf)\n"
+            "    \n"
+            "    # Create a temporary DataFrame with the computed value for the specific date\n"
+            "    temp_df = pdf.filter(pl.col(date_col) == target_date).with_columns(\n"
+            "        value_expr.alias(f'{target_col}_new')\n"
+            "    ).select([date_col, f'{target_col}_new'])\n"
+            "    \n"
+            "    # Join back and update the column\n"
+            "    result = pdf.join(temp_df, on=date_col, how='left').with_columns(\n"
+            "        pl.when(pl.col(f'{target_col}_new').is_not_null())\n"
+            "        .then(pl.col(f'{target_col}_new'))\n"
+            "        .otherwise(pl.col(target_col))\n"
+            "        .alias(target_col)\n"
+            "    ).drop(f'{target_col}_new')\n"
+            "    \n"
+            "    return result"
         )
 
     return defs
