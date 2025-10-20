@@ -43,6 +43,22 @@ Fame2PyGen consists of two main modules that work together to convert FAME scrip
 | Time Indexing | Shift transformation | `pl.col("V1").shift(-1)` |
 | SHIFT_PCT Backwards | Batch processing | `SHIFT_PCT_BACKWARDS_MULTIPLE(...)` |
 | Chain Operations | Function wrapping | `CHAIN(price_quantity_pairs=[...])` |
+| Frequency Commands | Metadata tracking | `{"type": "freq", "freq": "b"}` |
+
+### Frequency Support
+
+Fame2PyGen supports all standard FAME frequency codes:
+
+| FAME Code | Frequency | Description |
+|-----------|-----------|-------------|
+| `a` | Annual | Yearly data |
+| `q` | Quarterly | Quarterly data |
+| `m` | Monthly | Monthly data |
+| `w` | Weekly | Weekly data |
+| `d` | Daily | Daily data (all days) |
+| `b` or `bus` | Business | Business days (excludes weekends/holidays) |
+
+The frequency setting is parsed and made available to polars-econ functions (like `convert()`) which handle frequency-specific transformations including business day calendar adjustments.
 
 ## Dependency Analysis Details
 

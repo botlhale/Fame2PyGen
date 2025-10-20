@@ -36,6 +36,7 @@ Fame2PyGen processes a list of FAME commands and generates three Python files:
 - Special SHIFT_PCT patterns (forward and backward calculations)
 - Convert and Fishvol functions
 - Date filtering commands (`date 2020-01-01 to 2020-12-31`, `date *`)
+- Frequency commands (`freq m`, `freq q`, `freq b`, `freq bus`, etc.)
 
 ### Date Filtering Support
 
@@ -54,6 +55,27 @@ commands = [
     "v1 = v2 + v3",  # Only affects dates in 2020
     "date *",
     "v4 = v5 + v6",  # Affects all dates
+]
+```
+
+### Frequency Support
+
+Fame2PyGen supports FAME frequency commands for defining time series periodicity:
+
+- **`freq a`**: Annual frequency
+- **`freq q`**: Quarterly frequency
+- **`freq m`**: Monthly frequency
+- **`freq w`**: Weekly frequency
+- **`freq d`**: Daily frequency
+- **`freq b`** or **`freq bus`**: Business day frequency (working days, excluding weekends and holidays)
+
+The frequency setting integrates with polars-econ for time series operations like `convert()`, ensuring proper handling of business day calendars and other time-based transformations.
+
+Example:
+```python
+commands = [
+    "freq b",  # Set business day frequency
+    "v1 = convert(v2, 'm', 'b', 'avg', 'end')",  # Convert monthly to business day
 ]
 ```
 
