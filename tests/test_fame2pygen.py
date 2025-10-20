@@ -431,3 +431,270 @@ def test_multiple_date_ranges():
             os.unlink(formulas_file)
         if os.path.exists(ts_file):
             os.unlink(ts_file)
+
+def test_parse_conditional_simple():
+    """Test parsing of simple conditional expression."""
+    result = parse_fame_formula('abc = if t ge 5 then a+b else nd')
+    assert result is not None
+    assert result["type"] == "conditional"
+    assert result["target"] == "abc"
+    assert result["condition"] == "t ge 5"
+    assert result["then_expr"] == "a+b"
+    assert result["else_expr"] == "nd"
+
+def test_parse_conditional_with_functions():
+    """Test parsing of conditional with FAME functions."""
+    result = parse_fame_formula('abc = if t ge dateof(make(date(bus), "3dec1991"),*,contain,end) then a+b+ce+d else nd')
+    assert result is not None
+    assert result["type"] == "conditional"
+    assert result["target"] == "abc"
+    assert "dateof" in result["condition"]
+    assert result["then_expr"] == "a+b+ce+d"
+    assert result["else_expr"] == "nd"
+
+def test_parse_conditional_complex_condition():
+    """Test parsing of conditional with complex condition."""
+    result = parse_fame_formula('x = if v1 gt 100 then v2 * 2 else v3')
+    assert result is not None
+    assert result["type"] == "conditional"
+    assert result["target"] == "x"
+    assert result["condition"] == "v1 gt 100"
+    assert result["then_expr"] == "v2 * 2"
+    assert result["else_expr"] == "v3"
+
+def test_parse_conditional_with_comparisons():
+    """Test parsing of conditionals with various comparison operators."""
+    test_cases = [
+        ('y = if a ge b then c else d', 'ge'),
+        ('y = if a gt b then c else d', 'gt'),
+        ('y = if a le b then c else d', 'le'),
+        ('y = if a lt b then c else d', 'lt'),
+        ('y = if a eq b then c else d', 'eq'),
+        ('y = if a ne b then c else d', 'ne'),
+    ]
+    
+    for formula, op in test_cases:
+        result = parse_fame_formula(formula)
+        assert result is not None
+        assert result["type"] == "conditional"
+        assert op in result["condition"]
+
+def test_conditional_nd_handling():
+    """Test that 'nd' is properly recognized in conditional expressions."""
+    from fame2pygen.formulas_generator import _token_to_pl_expr
+    
+    # Test nd token conversion
+    assert _token_to_pl_expr("nd") == "pl.lit(None)"
+    assert _token_to_pl_expr("ND") == "pl.lit(None)"
+    assert _token_to_pl_expr("Nd") == "pl.lit(None)"
+
+def test_conditional_code_generation():
+    """Test that conditionals generate correct Polars code."""
+    from fame2pygen.fame2py_converter import generate_formulas_file, generate_test_script
+    import tempfile
+    import os
+    
+    cmds = [
+        'freq m',
+        'result = if v1 gt 100 then v2 * 2 else nd'
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        formulas_file = f.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        ts_file = f.name
+    
+    try:
+        generate_formulas_file(cmds, formulas_file)
+        generate_test_script(cmds, ts_file)
+        
+        # Read generated code
+        with open(ts_file, 'r') as f:
+            ts_content = f.read()
+        
+        # Verify conditional patterns are present
+        assert "pl.when" in ts_content
+        assert ".then" in ts_content
+        assert ".otherwise" in ts_content
+        assert "pl.lit(None)" in ts_content  # nd should be converted
+        assert ">" in ts_content  # gt should be converted to >
+        
+        # Verify code compiles
+        compile(ts_content, ts_file, 'exec')
+    finally:
+        if os.path.exists(formulas_file):
+            os.unlink(formulas_file)
+        if os.path.exists(ts_file):
+            os.unlink(ts_file)
+
+def test_conditional_with_arithmetic():
+    """Test conditional with arithmetic expressions in branches."""
+    from fame2pygen.fame2py_converter import generate_formulas_file, generate_test_script
+    import tempfile
+    import os
+    
+    cmds = [
+        'freq m',
+        'adjusted = if year gt 2020 then price * 1.05 else price'
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        formulas_file = f.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        ts_file = f.name
+    
+    try:
+        generate_formulas_file(cmds, formulas_file)
+        generate_test_script(cmds, ts_file)
+        
+        with open(ts_file, 'r') as f:
+            ts_content = f.read()
+        
+        # Verify structure
+        assert "pl.when" in ts_content
+        assert "YEAR" in ts_content or "year" in ts_content
+        assert "PRICE" in ts_content or "price" in ts_content
+        assert "*" in ts_content
+        
+        # Verify code compiles
+        compile(ts_content, ts_file, 'exec')
+    finally:
+        if os.path.exists(formulas_file):
+            os.unlink(formulas_file)
+        if os.path.exists(ts_file):
+            os.unlink(ts_file)
+
+def test_conditional_execution():
+    """Test that conditional expressions execute correctly with actual data."""
+    from fame2pygen.fame2py_converter import generate_formulas_file, generate_test_script
+    import tempfile
+    import os
+    import sys
+    from datetime import date
+    
+    cmds = [
+        'freq m',
+        'v1 = 150',
+        'v2 = 200',
+        'result = if v1 gt 100 then v2 * 2 else v2'
+    ]
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        formulas_file = os.path.join(tmpdir, "formulas.py")
+        ts_file = os.path.join(tmpdir, "ts_transformer.py")
+        
+        generate_formulas_file(cmds, formulas_file)
+        generate_test_script(cmds, ts_file)
+        
+        sys.path.insert(0, tmpdir)
+        
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("ts_transformer", ts_file)
+            ts_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(ts_module)
+            
+            # Create test DataFrame
+            test_df = pl.DataFrame({
+                "DATE": [date(2020, 1, 1), date(2020, 2, 1)]
+            })
+            
+            # Apply transformations
+            result = ts_module.ts_transformer(test_df)
+            
+            # Verify results
+            assert "V1" in result.columns
+            assert "V2" in result.columns
+            assert "RESULT" in result.columns
+            
+            # v1 = 150, v2 = 200
+            # Since v1 (150) > 100, result should be v2 * 2 = 400
+            assert all(result["V1"] == 150)
+            assert all(result["V2"] == 200)
+            assert all(result["RESULT"] == 400)
+        finally:
+            sys.path.remove(tmpdir)
+
+def test_conditional_with_null_else():
+    """Test that nd in else clause produces null values."""
+    from fame2pygen.fame2py_converter import generate_formulas_file, generate_test_script
+    import tempfile
+    import os
+    import sys
+    from datetime import date
+    
+    cmds = [
+        'freq m',
+        'v1 = 50',
+        'v2 = 200',
+        'result = if v1 gt 100 then v2 * 2 else nd'
+    ]
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        formulas_file = os.path.join(tmpdir, "formulas.py")
+        ts_file = os.path.join(tmpdir, "ts_transformer.py")
+        
+        generate_formulas_file(cmds, formulas_file)
+        generate_test_script(cmds, ts_file)
+        
+        sys.path.insert(0, tmpdir)
+        
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("ts_transformer", ts_file)
+            ts_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(ts_module)
+            
+            # Create test DataFrame
+            test_df = pl.DataFrame({
+                "DATE": [date(2020, 1, 1), date(2020, 2, 1)]
+            })
+            
+            # Apply transformations
+            result = ts_module.ts_transformer(test_df)
+            
+            # Verify results
+            # v1 = 50, which is NOT > 100, so result should be nd (None)
+            assert all(result["V1"] == 50)
+            assert all(result["RESULT"].is_null())
+        finally:
+            sys.path.remove(tmpdir)
+
+def test_multiple_conditionals():
+    """Test multiple conditional expressions in sequence."""
+    from fame2pygen.fame2py_converter import generate_formulas_file, generate_test_script
+    import tempfile
+    import os
+    
+    cmds = [
+        'freq m',
+        'v1 = 100',
+        'v2 = 200',
+        'result1 = if v1 gt 50 then v2 else nd',
+        'result2 = if v1 lt 150 then v2 * 2 else v2'
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        formulas_file = f.name
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        ts_file = f.name
+    
+    try:
+        generate_formulas_file(cmds, formulas_file)
+        generate_test_script(cmds, ts_file)
+        
+        with open(ts_file, 'r') as f:
+            ts_content = f.read()
+        
+        # Verify both conditionals are present
+        assert ts_content.count("pl.when") >= 2
+        assert "RESULT1" in ts_content
+        assert "RESULT2" in ts_content
+        
+        # Verify code compiles
+        compile(ts_content, ts_file, 'exec')
+    finally:
+        if os.path.exists(formulas_file):
+            os.unlink(formulas_file)
+        if os.path.exists(ts_file):
+            os.unlink(ts_file)

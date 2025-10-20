@@ -18,6 +18,7 @@ from .formulas_generator import (
     parse_time_index,
     parse_date_index,
     render_polars_expr,
+    render_conditional_expr,
     _token_to_pl_expr,
     _is_numeric_literal,
     _is_strict_number,
@@ -407,6 +408,36 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     # Generate POINT_IN_TIME_ASSIGN call - this needs to be outside with_columns
                     # So we'll handle it separately after the level processing
                     lines.append(f'    pdf = POINT_IN_TIME_ASSIGN(pdf, "{tgt_alias}", "{date_str}", {expr_text})\n')
+                    continue
+
+                # conditional expression handling
+                if formula.get("type") == "conditional":
+                    condition = formula.get("condition", "")
+                    then_expr = formula.get("then_expr", "")
+                    else_expr = formula.get("else_expr", "")
+                    
+                    # Build substitution map for all expressions
+                    subs: Dict[str, str] = {}
+                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "dateof", "make", "date", "contain", "end"}
+                    # Collect all tokens from condition, then_expr, and else_expr
+                    all_text = f"{condition} {then_expr} {else_expr}"
+                    for t in TOKEN_RE.finditer(all_text):
+                        tok = t.group(0)
+                        key = tok.lower()
+                        if key == "t":
+                            continue
+                        if _is_numeric_literal(tok):
+                            continue
+                        if key in function_names:
+                            continue
+                        if key in ('if', 'then', 'else', 'and', 'or', 'not', 'ge', 'gt', 'le', 'lt', 'eq', 'ne', 'nd'):
+                            continue
+                        subs[key] = _operand_to_pl(tok)
+                    
+                    # Render the conditional expression
+                    expr_text = render_conditional_expr(condition, then_expr, else_expr, substitution_map=subs)
+                    wrapped = wrap_with_date_filter(expr_text, tgt_alias)
+                    cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                     continue
 
                 # if RHS contains special markers, render with render_polars_expr
