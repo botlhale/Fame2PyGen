@@ -113,9 +113,14 @@ def _is_numeric_literal(tok: str) -> bool:
 def _token_to_pl_expr(tok: str) -> str:
     """
     Convert a token (maybe time indexed) to pl expression text:
+      - 'nd' (FAME null/missing) -> pl.lit(None)
       - numeric literal -> literal number (kept as-is)
       - series id or name -> pl.col("NAME").shift(-offset) (offset from [t+N] or [t-N])
     """
+    # Handle 'nd' keyword
+    if tok.lower() == 'nd':
+        return "pl.lit(None)"
+    
     base, offs = parse_time_index(tok)
     if base == "":
         return "pl.lit(None)"
@@ -220,6 +225,11 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
             parts.append(tok)
             last = e
             continue
+        # Skip __ND_PLACEHOLDER__ - it should remain as-is
+        if tok == "__ND_PLACEHOLDER__":
+            parts.append(tok)
+            last = e
+            continue
         # if substitution_map provides replacement, use placeholder for it
         if substitution_map and key in substitution_map:
             ph = f"__PH_{idx}__"
@@ -247,6 +257,66 @@ _shift_pct_re = re.compile(
 
 
 # ---------- Main renderer ----------
+
+def render_conditional_expr(condition: str, then_expr: str, else_expr: str, substitution_map: Optional[Dict[str, str]] = None) -> str:
+    """
+    Render FAME conditional expression to Polars .when().then().otherwise() pattern.
+    
+    Handles:
+    - Comparison operators: ge, gt, le, lt, eq, ne
+    - 'nd' keyword mapping to pl.lit(None)
+    - FAME functions: dateof, make, date, contain, end
+    - Variable references with substitution
+    """
+    # Parse and render condition
+    # FAME comparison operators: ge (>=), gt (>), le (<=), lt (<), eq (==), ne (!=)
+    comparisons = {
+        'ge': '>=',
+        'gt': '>',
+        'le': '<=',
+        'lt': '<',
+        'eq': '==',
+        'ne': '!='
+    }
+    
+    # Replace comparison operators
+    cond_polars = condition
+    for fame_op, py_op in comparisons.items():
+        # Use word boundaries to avoid partial matches
+        cond_polars = re.sub(r'\b' + fame_op + r'\b', py_op, cond_polars, flags=re.IGNORECASE)
+    
+    # Handle 'nd' keyword (null/missing in FAME) -> pl.lit(None)
+    # Do this BEFORE tokenization to avoid splitting it up
+    def replace_nd_keyword(expr: str) -> str:
+        # Replace 'nd' keyword with a placeholder that won't be tokenized
+        return re.sub(r'\bnd\b', '__ND_PLACEHOLDER__', expr, flags=re.IGNORECASE)
+    
+    def restore_nd_placeholder(expr: str) -> str:
+        # Restore placeholder to pl.lit(None)
+        return expr.replace('__ND_PLACEHOLDER__', 'pl.lit(None)')
+    
+    # Process condition - substitute variables
+    cond_expr = cond_polars
+    if substitution_map:
+        for token_match in TOKEN_RE.finditer(cond_polars):
+            token = token_match.group(0)
+            token_lower = token.lower()
+            if token_lower != 't' and token_lower in substitution_map:
+                cond_expr = cond_expr.replace(token, substitution_map[token_lower])
+    
+    # Process then_expr - replace nd first
+    then_with_placeholder = replace_nd_keyword(then_expr)
+    then_polars = render_polars_expr(then_with_placeholder, substitution_map=substitution_map)
+    then_polars = restore_nd_placeholder(then_polars)
+    
+    # Process else_expr - replace nd first
+    else_with_placeholder = replace_nd_keyword(else_expr)
+    else_polars = render_polars_expr(else_with_placeholder, substitution_map=substitution_map)
+    else_polars = restore_nd_placeholder(else_polars)
+    
+    # Build Polars when/then/otherwise
+    return f"pl.when({cond_expr}).then({then_polars}).otherwise({else_polars})"
+
 
 def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = None, memory: Optional[Dict[str, str]] = None, ctx: Optional[Dict[str, bool]] = None) -> str:
     """
@@ -368,6 +438,46 @@ def _parse_chain_top_level(line: str) -> Optional[Dict]:
     return None
 
 
+def parse_conditional_expr(expr: str) -> Optional[Dict]:
+    """
+    Parse FAME-style conditional expressions:
+      if <condition> then <then_expr> else <else_expr>
+    
+    Returns dict with:
+      - condition: the condition expression
+      - then_expr: expression for true case
+      - else_expr: expression for false case
+      - refs: list of variable references in all parts
+    """
+    # Match pattern: if ... then ... else ...
+    # Need to handle nested parentheses in condition
+    if_match = re.match(r'^\s*if\s+(.+?)\s+then\s+(.+?)\s+else\s+(.+?)\s*$', expr, re.IGNORECASE)
+    if not if_match:
+        return None
+    
+    condition = if_match.group(1).strip()
+    then_expr = if_match.group(2).strip()
+    else_expr = if_match.group(3).strip()
+    
+    # Extract references from all parts
+    refs = []
+    for part in [condition, then_expr, else_expr]:
+        raw = TOKEN_RE.findall(part)
+        for tkn in raw:
+            if tkn.lower() not in ('t', 'if', 'then', 'else', 'and', 'or', 'not') and not _is_strict_number(tkn):
+                base, _ = parse_time_index(tkn)
+                if base and not _is_strict_number(base):
+                    refs.append(tkn)
+    
+    return {
+        "type": "conditional",
+        "condition": condition,
+        "then_expr": then_expr,
+        "else_expr": else_expr,
+        "refs": refs
+    }
+
+
 def parse_fame_formula(line: str) -> Optional[Dict]:
     """
     Lightweight parser returning dicts with keys used by the pipeline generator.
@@ -474,11 +584,20 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
                 return {"type": "shift_pct", "target": target, "refs": [ser1, ser2], "original_rhs": rhs_temp, 
                         "ser1": ser1, "ser2": ser2, "offset": offs1}
 
-    # 8) generic assignment / arithmetic fallback
+    # 8) conditional expression check (before generic assignment)
     if "=" in s:
         lhs, rhs = s.split("=", 1)
         lhs = lhs.strip()
         rhs = rhs.strip()
+        
+        # Check for conditional expression in RHS
+        if re.match(r'^\s*if\s+.+\s+then\s+.+\s+else\s+.+\s*$', rhs, re.IGNORECASE):
+            cond_result = parse_conditional_expr(rhs)
+            if cond_result:
+                cond_result["target"] = lhs
+                cond_result["original_rhs"] = rhs
+                return cond_result
+        
         # assign-series single token (e.g., v1234s = 1234) - RHS may be series id or numeric literal
         m_assign = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*([A-Za-z0-9_$.]+)\s*$", s)
         if m_assign:
