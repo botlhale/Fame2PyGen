@@ -72,5 +72,16 @@ def test_freq_command():
     assert result["type"] == "freq"
     assert result["freq"] == "m"
 
+def test_date_all_command():
+    result = parse_fame_formula("date *")
+    assert result["type"] == "date"
+    assert result["filter"] is None
+
+def test_date_range_command():
+    result = parse_fame_formula("date 2020-01-01 to 2020-12-31")
+    assert result["type"] == "date"
+    assert result["filter"]["start"] == "2020-01-01"
+    assert result["filter"]["end"] == "2020-12-31"
+
 if __name__ == "__main__":
     pytest.main()
