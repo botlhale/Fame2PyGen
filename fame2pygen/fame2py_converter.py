@@ -25,9 +25,13 @@ from .formulas_generator import (
     TOKEN_RE,
     _shift_pct_re,
     normalize_formula_text,
+    FUNCTION_NAMES,
 )
 
 ARITH_SPLIT_RE = re.compile(r"(\+|\-|\*|/)")
+
+# Additional function names used in conditional expressions for date functions
+CONDITIONAL_FUNCTION_NAMES = FUNCTION_NAMES | {"dateof", "make", "date", "contain", "end"}
 
 
 def preprocess_commands(lines: List[str]) -> List[str]:
@@ -173,14 +177,21 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
         np["original_order"] = idx
         parsed.append(np)
 
-    # Build formulas dict - for point-in-time assignments, use target+date as key
-    # to avoid overwriting multiple assignments to the same variable at different dates
+    # Build formulas dict - for point-in-time assignments and date-filtered assignments,
+    # use target+identifier as key to avoid overwriting multiple assignments to the same variable
     formulas = {}
     for p in parsed:
         if "target" in p:
             if p.get("type") == "point_in_time_assign":
                 # Use target+date as key for uniqueness
                 key = f"{p['target']}@{p.get('date', '')}"
+                formulas[key] = p
+            elif p.get("date_filter") is not None:
+                # Use target+date_filter as key for date-filtered assignments
+                # to preserve multiple assignments to the same variable with different date ranges
+                date_filter = p["date_filter"]
+                date_key = f"{date_filter.get('start', '*')}_to_{date_filter.get('end', '*')}"
+                key = f"{p['target']}@datefilter_{date_key}_{p.get('original_order', 0)}"
                 formulas[key] = p
             else:
                 formulas[p["target"]] = p
@@ -213,6 +224,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     
     # Track the current date filter state to add as comments
     current_filter_state = None
+    
+    # Track columns that have been assigned to determine if we need to preserve existing values
+    assigned_columns = set()
 
     # Handle multiple SHIFT_PCT_BACKWARDS at the beginning
     if shift_pct_backwards_patterns:
@@ -268,17 +282,25 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             cols: List[str] = []
             
             # Helper function to wrap expression with date filter if needed
-            def wrap_with_date_filter(expr: str, target_col: str) -> str:
+            def wrap_with_date_filter(expr: str, target_col: str, preserve_existing: bool = False) -> str:
                 """Wrap expression with APPLY_DATE_FILTER if group has date filter."""
                 if group_filter is not None:
                     start = group_filter['start']
                     end = group_filter['end']
-                    return f'APPLY_DATE_FILTER({expr}, "{target_col}", "{start}", "{end}")'
+                    # Include preserve_existing parameter if True
+                    if preserve_existing:
+                        return f'APPLY_DATE_FILTER({expr}, "{target_col}", "{start}", "{end}", preserve_existing=True)'
+                    else:
+                        return f'APPLY_DATE_FILTER({expr}, "{target_col}", "{start}", "{end}")'
                 return expr
             
             for tgt in group_targets:
                 formula = formulas[tgt]
                 tgt_alias = sanitize_func_name(formula["target"]).upper()
+                
+                # Check if this column has been assigned before to determine preserve_existing
+                preserve_existing = tgt_alias in assigned_columns
+                
                 rhs_text = (formula.get("rhs") or "").strip()
                 rhs_normalized = normalize_formula_text(rhs_text)
                 rhs_lower = rhs_normalized.lower()
@@ -297,8 +319,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         pair_items.append(f"({sign}pl.col('{pcol}'), pl.col('{vcol}'))")
                     pairs_str = ", ".join(pair_items)
                     expr = f'CHAIN(price_quantity_pairs=[{pairs_str}], date_col=pl.col("DATE"), year="{formula.get("year","")}")'
-                    wrapped = wrap_with_date_filter(expr, tgt_alias)
+                    wrapped = wrap_with_date_filter(expr, tgt_alias, preserve_existing)
                     cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                    assigned_columns.add(tgt_alias)
                     continue
 
                 # exact SHIFT_PCT pattern detection
@@ -315,8 +338,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     else:
                         # Forward SHIFT_PCT
                         expr = f'SHIFT_PCT(pl.col("{ser1_col}"), pl.col("{ser2_col}"), {offs1})'
-                        wrapped = wrap_with_date_filter(expr, tgt_alias)
+                        wrapped = wrap_with_date_filter(expr, tgt_alias, preserve_existing)
                         cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        assigned_columns.add(tgt_alias)
                     continue
 
                 # point-in-time assignment handling
@@ -392,7 +416,6 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         else:
                             # No date-indexed references - normal expression
                             subs: Dict[str, str] = {}
-                            function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
                             for t in TOKEN_RE.finditer(rhs):
                                 tok = t.group(0)
                                 key = tok.lower()
@@ -400,7 +423,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                                     continue
                                 if _is_numeric_literal(tok):
                                     continue
-                                if key in function_names:
+                                if key in FUNCTION_NAMES:
                                     continue
                                 subs[key] = _operand_to_pl(tok)
                             expr_text = render_polars_expr(rhs, substitution_map=subs, memory=None, ctx=None)
@@ -418,7 +441,6 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     
                     # Build substitution map for all expressions
                     subs: Dict[str, str] = {}
-                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "dateof", "make", "date", "contain", "end"}
                     # Collect all tokens from condition, then_expr, and else_expr
                     all_text = f"{condition} {then_expr} {else_expr}"
                     for t in TOKEN_RE.finditer(all_text):
@@ -428,7 +450,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                             continue
                         if _is_numeric_literal(tok):
                             continue
-                        if key in function_names:
+                        if key in CONDITIONAL_FUNCTION_NAMES:
                             continue
                         if key in ('if', 'then', 'else', 'and', 'or', 'not', 'ge', 'gt', 'le', 'lt', 'eq', 'ne', 'nd'):
                             continue
@@ -436,28 +458,29 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     
                     # Render the conditional expression
                     expr_text = render_conditional_expr(condition, then_expr, else_expr, substitution_map=subs)
-                    wrapped = wrap_with_date_filter(expr_text, tgt_alias)
+                    wrapped = wrap_with_date_filter(expr_text, tgt_alias, preserve_existing)
                     cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                    assigned_columns.add(tgt_alias)
                     continue
 
                 # if RHS contains special markers, render with render_polars_expr
-                if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase("]):
+                if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase(", "sqrt("]):
                     subs: Dict[str, str] = {}
                     # Build substitution map, but skip function names
-                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
                     for t in TOKEN_RE.findall(rhs_text):
                         key = t.lower()
                         if key == "t":
                             continue
                         if _is_numeric_literal(t):
                             continue
-                        if key in function_names:
+                        if key in FUNCTION_NAMES:
                             continue  # Skip function names - they'll be handled by render_polars_expr
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                     expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-                    wrapped = wrap_with_date_filter(f"({expr_text})", tgt_alias)
+                    wrapped = wrap_with_date_filter(f"({expr_text})", tgt_alias, preserve_existing)
                     cols.append(f"        {wrapped}.alias('{tgt_alias}')")
+                    assigned_columns.add(tgt_alias)
                     continue
 
                 # assign-series single token (including time-indexed tokens like v2[t+1])
@@ -469,8 +492,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     # If it's a bare number, wrap it in pl.lit()
                     if _is_numeric_literal(src_tok):
                         src_expr = f"pl.lit({src_expr})"
-                    wrapped = wrap_with_date_filter(src_expr, tgt_alias)
+                    wrapped = wrap_with_date_filter(src_expr, tgt_alias, preserve_existing)
                     cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                    assigned_columns.add(tgt_alias)
                     continue
 
                 # arithmetic detection
@@ -490,67 +514,71 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         base_expr = args_list[0]
                         for arg in args_list[1:]:
                             base_expr = f'{base_expr} + {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
                         cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        assigned_columns.add(tgt_alias)
                         continue
                     if unique_ops == {"-"}:
                         args_list = [wrap_operand(opnd) for opnd in operands]
                         base_expr = args_list[0]
                         for arg in args_list[1:]:
                             base_expr = f'{base_expr} - {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
                         cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        assigned_columns.add(tgt_alias)
                         continue
                     if unique_ops == {"*"}:
                         args_list = [wrap_operand(opnd) for opnd in operands]
                         base_expr = args_list[0]
                         for arg in args_list[1:]:
                             base_expr = f'{base_expr} * {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
                         cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        assigned_columns.add(tgt_alias)
                         continue
                     if unique_ops == {"/"}:
                         args_list = [wrap_operand(opnd) for opnd in operands]
                         base_expr = args_list[0]
                         for arg in args_list[1:]:
                             base_expr = f'{base_expr} / {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias)
+                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
                         cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        assigned_columns.add(tgt_alias)
                         continue
                     # mixed -> render polars expr and alias
                     subs: Dict[str, str] = {}
-                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
                     for t in TOKEN_RE.findall(rhs_text):
                         key = t.lower()
                         if key == "t":
                             continue
                         if _is_numeric_literal(t):
                             continue
-                        if key in function_names:
+                        if key in FUNCTION_NAMES:
                             continue
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                     expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-                    wrapped = wrap_with_date_filter(expr_text, tgt_alias)
+                    wrapped = wrap_with_date_filter(expr_text, tgt_alias, preserve_existing)
                     cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                    assigned_columns.add(tgt_alias)
                     continue
 
                 # fallback: render and alias
                 subs: Dict[str, str] = {}
-                function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
                 for t in TOKEN_RE.findall(rhs_text):
                     key = t.lower()
                     if key == "t":
                         continue
                     if _is_numeric_literal(t):
                         continue
-                    if key in function_names:
+                    if key in FUNCTION_NAMES:
                         continue
                     subs[key] = _operand_to_pl(t)
                 expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
                 expr_text = re.sub(r"\)\s*/\s*100\b", ").truediv(100)", expr_text)
-                wrapped = wrap_with_date_filter(expr_text, tgt_alias)
+                wrapped = wrap_with_date_filter(expr_text, tgt_alias, preserve_existing)
                 cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                assigned_columns.add(tgt_alias)
 
             if cols:
                 lines.append("    pdf = pdf.with_columns([\n" + ",\n".join(cols) + "\n    ])\n")
