@@ -19,6 +19,17 @@ Responsibilities:
 import re
 from typing import Dict, List, Tuple, Optional
 
+# ---------- Constants ----------
+
+# Recognized FAME function names that should not be tokenized as variables
+FUNCTION_NAMES = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
+
+# Logical operators that should be preserved during tokenization
+LOGICAL_OPERATORS = {"or", "and"}
+
+# All keywords that should not be treated as variable references
+FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS
+
 # ---------- Utilities ----------
 
 def sanitize_func_name(name: Optional[str]) -> str:
@@ -205,8 +216,6 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
     Numeric literals and bare 't' are left as-is.
     Function names (pct, convert, etc.) are left as-is to be processed later.
     """
-    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
-    logical_operators = {"or", "and"}  # Logical operators to keep as-is
     placeholders: Dict[str, str] = {}
     parts: List[str] = []
     last = 0
@@ -222,12 +231,12 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
             last = e
             continue
         # keep function names as-is (they'll be processed by pct conversion logic)
-        if key in function_names:
+        if key in FUNCTION_NAMES:
             parts.append(tok)
             last = e
             continue
         # keep logical operators as-is (they'll be processed later)
-        if key in logical_operators:
+        if key in LOGICAL_OPERATORS:
             parts.append(tok)
             last = e
             continue
@@ -646,8 +655,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         # fallback simple / arithmetic: collect refs tokens
         raw = TOKEN_RE.findall(rhs)
         # Filter out function names and logical operators from refs
-        function_keywords = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt", "or", "and"}
-        refs = [tkn for tkn in raw if tkn.lower() != "t" and tkn.lower() not in function_keywords]
+        refs = [tkn for tkn in raw if tkn.lower() != "t" and tkn.lower() not in FUNCTION_KEYWORDS]
         return {"type": "simple", "target": lhs, "rhs": rhs, "original_rhs": rhs, "refs": refs}
 
     return None

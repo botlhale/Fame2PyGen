@@ -25,9 +25,13 @@ from .formulas_generator import (
     TOKEN_RE,
     _shift_pct_re,
     normalize_formula_text,
+    FUNCTION_NAMES,
 )
 
 ARITH_SPLIT_RE = re.compile(r"(\+|\-|\*|/)")
+
+# Additional function names used in conditional expressions for date functions
+CONDITIONAL_FUNCTION_NAMES = FUNCTION_NAMES | {"dateof", "make", "date", "contain", "end"}
 
 
 def preprocess_commands(lines: List[str]) -> List[str]:
@@ -412,7 +416,6 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         else:
                             # No date-indexed references - normal expression
                             subs: Dict[str, str] = {}
-                            function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
                             for t in TOKEN_RE.finditer(rhs):
                                 tok = t.group(0)
                                 key = tok.lower()
@@ -420,7 +423,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                                     continue
                                 if _is_numeric_literal(tok):
                                     continue
-                                if key in function_names:
+                                if key in FUNCTION_NAMES:
                                     continue
                                 subs[key] = _operand_to_pl(tok)
                             expr_text = render_polars_expr(rhs, substitution_map=subs, memory=None, ctx=None)
@@ -438,7 +441,6 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     
                     # Build substitution map for all expressions
                     subs: Dict[str, str] = {}
-                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt", "dateof", "make", "date", "contain", "end"}
                     # Collect all tokens from condition, then_expr, and else_expr
                     all_text = f"{condition} {then_expr} {else_expr}"
                     for t in TOKEN_RE.finditer(all_text):
@@ -448,7 +450,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                             continue
                         if _is_numeric_literal(tok):
                             continue
-                        if key in function_names:
+                        if key in CONDITIONAL_FUNCTION_NAMES:
                             continue
                         if key in ('if', 'then', 'else', 'and', 'or', 'not', 'ge', 'gt', 'le', 'lt', 'eq', 'ne', 'nd'):
                             continue
@@ -465,14 +467,13 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase(", "sqrt("]):
                     subs: Dict[str, str] = {}
                     # Build substitution map, but skip function names
-                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
                     for t in TOKEN_RE.findall(rhs_text):
                         key = t.lower()
                         if key == "t":
                             continue
                         if _is_numeric_literal(t):
                             continue
-                        if key in function_names:
+                        if key in FUNCTION_NAMES:
                             continue  # Skip function names - they'll be handled by render_polars_expr
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
@@ -546,14 +547,13 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         continue
                     # mixed -> render polars expr and alias
                     subs: Dict[str, str] = {}
-                    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
                     for t in TOKEN_RE.findall(rhs_text):
                         key = t.lower()
                         if key == "t":
                             continue
                         if _is_numeric_literal(t):
                             continue
-                        if key in function_names:
+                        if key in FUNCTION_NAMES:
                             continue
                         subs[key] = _operand_to_pl(t)
                     expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
@@ -565,14 +565,13 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
 
                 # fallback: render and alias
                 subs: Dict[str, str] = {}
-                function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
                 for t in TOKEN_RE.findall(rhs_text):
                     key = t.lower()
                     if key == "t":
                         continue
                     if _is_numeric_literal(t):
                         continue
-                    if key in function_names:
+                    if key in FUNCTION_NAMES:
                         continue
                     subs[key] = _operand_to_pl(t)
                 expr_text = render_polars_expr(rhs_text, substitution_map=subs, memory=None, ctx=None)
