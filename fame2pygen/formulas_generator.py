@@ -205,7 +205,8 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
     Numeric literals and bare 't' are left as-is.
     Function names (pct, convert, etc.) are left as-is to be processed later.
     """
-    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain"}
+    function_names = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
+    logical_operators = {"or", "and"}  # Logical operators to keep as-is
     placeholders: Dict[str, str] = {}
     parts: List[str] = []
     last = 0
@@ -222,6 +223,11 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
             continue
         # keep function names as-is (they'll be processed by pct conversion logic)
         if key in function_names:
+            parts.append(tok)
+            last = e
+            continue
+        # keep logical operators as-is (they'll be processed later)
+        if key in logical_operators:
             parts.append(tok)
             last = e
             continue
@@ -403,6 +409,39 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
         i = j
 
     combined = "".join(out_parts)
+
+    # 4b) Process sqrt(...) constructs on the combined string (balanced)
+    sqrt_parts: List[str] = []
+    i = 0
+    while True:
+        m = re.search(r"\bsqrt\s*\(", combined[i:], re.IGNORECASE)
+        if not m:
+            sqrt_parts.append(combined[i:])
+            break
+        s_pos = i + m.start()
+        sqrt_parts.append(combined[i:s_pos])
+        j = s_pos + len(m.group(0))
+        depth = 1
+        while j < len(combined) and depth > 0:
+            if combined[j] == "(":
+                depth += 1
+            elif combined[j] == ")":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            sqrt_parts.append(combined[s_pos:])
+            i = len(combined)
+            break
+        inner = combined[s_pos + len(m.group(0)) : j - 1].strip()
+        sqrt_parts.append(f"SQRT({inner})")
+        i = j
+    
+    combined = "".join(sqrt_parts)
+
+    # 4c) Handle logical operators: 'or' -> '|', 'and' -> '&'
+    # Replace whole word 'or' and 'and' with proper Polars operators
+    combined = re.sub(r'\bor\b', '|', combined, flags=re.IGNORECASE)
+    combined = re.sub(r'\band\b', '&', combined, flags=re.IGNORECASE)
 
     # 5) Replace placeholders with actual replacement strings (no further tokenization)
     final = combined
@@ -606,7 +645,9 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             return {"type": "assign_series", "target": target, "rhs": rhs_tok, "original_rhs": rhs}
         # fallback simple / arithmetic: collect refs tokens
         raw = TOKEN_RE.findall(rhs)
-        refs = [tkn for tkn in raw if tkn.lower() != "t"]
+        # Filter out function names and logical operators from refs
+        function_keywords = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt", "or", "and"}
+        refs = [tkn for tkn in raw if tkn.lower() != "t" and tkn.lower() not in function_keywords]
         return {"type": "simple", "target": lhs, "rhs": rhs, "original_rhs": rhs, "refs": refs}
 
     return None
@@ -627,6 +668,7 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
         "has_convert": False,
         "has_fishvol": False,
         "has_pct": False,
+        "has_sqrt": False,
         "need_shiftpct": False,
         "need_shiftpct_backwards": False,
         "need_assign": False,
@@ -651,6 +693,8 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
             ctx["has_fishvol"] = True
         if re.search(r"\bpct\s*\(", s, re.IGNORECASE):
             ctx["has_pct"] = True
+        if re.search(r"\bsqrt\s*\(", s, re.IGNORECASE):
+            ctx["has_sqrt"] = True
         
         # SHIFT_PCT detection with enhanced pattern recognition - also detect in assignments
         normalized = normalize_formula_text(s)
@@ -719,6 +763,12 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
             "def PCT(expr: pl.Expr, offset: int = 1) -> pl.Expr:\n"
             "    import polars_econ as ple\n"
             "    return ple.pct(expr, offset=offset)"
+        )
+    if ctx["has_sqrt"]:
+        defs["SQRT"] = (
+            "def SQRT(expr: pl.Expr) -> pl.Expr:\n"
+            "    \"\"\"Calculate the square root of an expression.\"\"\"\n"
+            "    return expr.sqrt()"
         )
     if ctx["need_shiftpct"]:
         defs["SHIFT_PCT"] = (
@@ -990,32 +1040,60 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(
     
     # Add helper for date range filtering
     defs["APPLY_DATE_FILTER"] = (
-        "def APPLY_DATE_FILTER(expr: pl.Expr, col_name: str, start_date: str, end_date: str, date_col: str = 'DATE') -> pl.Expr:\n"
-        '    """Apply expression only to rows within date range, using null for other rows.\n'
+        "def APPLY_DATE_FILTER(expr: pl.Expr, col_name: str, start_date: str, end_date: str, date_col: str = 'DATE', preserve_existing: bool = False) -> pl.Expr:\n"
+        '    """Apply expression only to rows within date range, using null or existing values for other rows.\n'
         "    \n"
         "    Args:\n"
         "        expr: Polars expression to apply\n"
         "        col_name: Name of the column being updated\n"
-        "        start_date: Start date string (e.g., '2020-01-01')\n"
-        "        end_date: End date string (e.g., '2020-12-31')\n"
+        "        start_date: Start date string (e.g., '2020-01-01' or '01Feb2020')\n"
+        "        end_date: End date string (e.g., '2020-12-31' or '*' for today)\n"
         "        date_col: Name of the date column (default 'DATE')\n"
+        "        preserve_existing: If True, preserve existing column values outside date range (default False)\n"
         "    \n"
         "    Returns:\n"
         "        Expression that applies to filtered rows only\n"
         '    """\n'
         "    import polars as pl\n"
-        "    from datetime import datetime\n"
+        "    from datetime import datetime, date as dt_date\n"
         "    \n"
-        "    # Parse dates\n"
-        "    start = datetime.strptime(start_date, '%Y-%m-%d').date()\n"
-        "    end = datetime.strptime(end_date, '%Y-%m-%d').date()\n"
+        "    # Parse start date - support multiple formats\n"
+        "    def parse_date(date_str):\n"
+        "        # Try YYYY-MM-DD format\n"
+        "        try:\n"
+        "            return datetime.strptime(date_str, '%Y-%m-%d').date()\n"
+        "        except ValueError:\n"
+        "            pass\n"
+        "        # Try ddMMMYYYY format (e.g., 01Feb2020)\n"
+        "        try:\n"
+        "            return datetime.strptime(date_str, '%d%b%Y').date()\n"
+        "        except ValueError:\n"
+        "            pass\n"
+        "        # Try YYYYQN format (e.g., 2020Q1)\n"
+        "        import re\n"
+        "        m = re.match(r'^(\\d{4})Q([1-4])$', date_str, re.IGNORECASE)\n"
+        "        if m:\n"
+        "            year = int(m.group(1))\n"
+        "            quarter = int(m.group(2))\n"
+        "            month = (quarter - 1) * 3 + 1\n"
+        "            return dt_date(year, month, 1)\n"
+        "        raise ValueError(f'Cannot parse date: {date_str}')\n"
         "    \n"
-        "    # Apply expression only within date range, otherwise use null\n"
-        "    # Note: This is for creating new columns filtered by date.\n"
-        "    # For updating existing columns, you'd use .otherwise(pl.col(col_name))\n"
+        "    start = parse_date(start_date)\n"
+        "    \n"
+        "    # Handle special end date '*' (up to today)\n"
+        "    if end_date == '*':\n"
+        "        end = dt_date.today()\n"
+        "    else:\n"
+        "        end = parse_date(end_date)\n"
+        "    \n"
+        "    # Apply expression only within date range\n"
+        "    # If preserve_existing is True, use existing column values outside the range\n"
+        "    # Otherwise, use null for rows outside the range\n"
+        "    otherwise_expr = pl.col(col_name) if preserve_existing else pl.lit(None)\n"
         "    return pl.when(\n"
         "        (pl.col(date_col) >= start) & (pl.col(date_col) <= end)\n"
-        "    ).then(expr).otherwise(pl.lit(None))"
+        "    ).then(expr).otherwise(otherwise_expr)"
     )
 
     return defs

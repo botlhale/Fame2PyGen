@@ -698,3 +698,159 @@ def test_multiple_conditionals():
             os.unlink(formulas_file)
         if os.path.exists(ts_file):
             os.unlink(ts_file)
+
+
+def test_sqrt_function():
+    """Test sqrt function parsing and rendering."""
+    result = parse_fame_formula("result = sqrt(a)")
+    assert result["type"] == "simple"
+    assert result["target"] == "result"
+    assert "a" in result["refs"]
+    # sqrt should not be in refs (it's a function, not a variable)
+    assert "sqrt" not in result["refs"]
+
+
+def test_sqrt_with_expression():
+    """Test sqrt with complex expression."""
+    result = parse_fame_formula("result = sqrt(a*b)")
+    assert result["type"] == "simple"
+    assert result["target"] == "result"
+    assert "a" in result["refs"]
+    assert "b" in result["refs"]
+
+
+def test_sqrt_with_or_operator():
+    """Test sqrt with or operator."""
+    result = parse_fame_formula("result = sqrt(a*b) or sqrt(c)")
+    assert result["type"] == "simple"
+    assert result["target"] == "result"
+    assert "a" in result["refs"]
+    assert "b" in result["refs"]
+    assert "c" in result["refs"]
+    # 'or' should not be in refs (it's an operator)
+    assert "or" not in result["refs"]
+
+
+def test_sqrt_function_generation():
+    """Test that SQRT function is generated when sqrt is used."""
+    from fame2pygen.fame2py_converter import generate_formulas_file
+    import tempfile
+    import os
+    
+    commands = ["result = sqrt(a)"]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        formulas_file = f.name
+    
+    try:
+        generate_formulas_file(commands, formulas_file)
+        
+        with open(formulas_file, 'r') as f:
+            content = f.read()
+        
+        assert "def SQRT" in content
+        assert "expr.sqrt()" in content
+    finally:
+        if os.path.exists(formulas_file):
+            os.unlink(formulas_file)
+
+
+def test_sqrt_transformer_generation():
+    """Test that sqrt generates correct transformer code."""
+    from fame2pygen.fame2py_converter import generate_test_script
+    import tempfile
+    import os
+    
+    commands = [
+        "freq m",
+        "result = sqrt(a*b) or sqrt(c)",
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        transformer_file = f.name
+    
+    try:
+        generate_test_script(commands, transformer_file)
+        
+        with open(transformer_file, 'r') as f:
+            content = f.read()
+        
+        assert "SQRT" in content
+        assert "|" in content  # or operator converted to |
+    finally:
+        if os.path.exists(transformer_file):
+            os.unlink(transformer_file)
+
+
+def test_multiple_date_filtered_assignments():
+    """Test multiple assignments to the same variable with different date filters."""
+    from fame2pygen.fame2py_converter import generate_test_script
+    import tempfile
+    import os
+    
+    commands = [
+        "freq bus",
+        "date 01Feb2020 to 31Dec2020",
+        "set a = 100",
+        "date 01Jan2021 to *",
+        "set a = 250",
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        transformer_file = f.name
+    
+    try:
+        generate_test_script(commands, transformer_file)
+        
+        with open(transformer_file, 'r') as f:
+            content = f.read()
+        
+        # Both assignments should be present
+        assert "01Feb2020" in content
+        assert "01Jan2021" in content
+        # Second assignment should preserve existing values
+        assert "preserve_existing=True" in content
+        # Both assignments should set column "A"
+        assert content.count('.alias("A")') == 2
+    finally:
+        if os.path.exists(transformer_file):
+            os.unlink(transformer_file)
+
+
+def test_date_filter_with_star_end():
+    """Test date filter with * as end date (up to today)."""
+    result = parse_fame_formula("date 01Jan2021 to *")
+    assert result["type"] == "date"
+    assert result["filter"]["start"] == "01Jan2021"
+    assert result["filter"]["end"] == "*"
+
+
+def test_apply_date_filter_function_generation():
+    """Test that APPLY_DATE_FILTER supports preserve_existing parameter."""
+    from fame2pygen.fame2py_converter import generate_formulas_file
+    import tempfile
+    import os
+    
+    commands = [
+        "date 01Feb2020 to 31Dec2020",
+        "a = 100",
+    ]
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        formulas_file = f.name
+    
+    try:
+        generate_formulas_file(commands, formulas_file)
+        
+        with open(formulas_file, 'r') as f:
+            content = f.read()
+        
+        assert "def APPLY_DATE_FILTER" in content
+        assert "preserve_existing" in content
+        # Function should support multiple date formats
+        assert "ddMMMYYYY" in content or "01Feb2020" in content or "datetime.strptime" in content
+        # Function should support * as end date
+        assert "if end_date == '*'" in content or "end_date == \"*\"" in content
+    finally:
+        if os.path.exists(formulas_file):
+            os.unlink(formulas_file)
