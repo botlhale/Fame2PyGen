@@ -37,6 +37,7 @@ def sanitize_func_name(name: Optional[str]) -> str:
         return ""
     s = str(name)
     s = s.replace("$", "_")
+    s = s.replace(".", "_")  # Convert dots to underscores
     s = re.sub(r"[^A-Za-z0-9_]", "", s)
     return s.lower()
 
@@ -316,7 +317,8 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str, subs
         for token_match in TOKEN_RE.finditer(cond_polars):
             token = token_match.group(0)
             token_lower = token.lower()
-            if token_lower != 't' and token_lower in substitution_map:
+            # Don't skip 't' anymore - let substitution map handle it
+            if token_lower in substitution_map:
                 cond_expr = cond_expr.replace(token, substitution_map[token_lower])
     
     # Process then_expr - replace nd first
@@ -324,10 +326,26 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str, subs
     then_polars = render_polars_expr(then_with_placeholder, substitution_map=substitution_map)
     then_polars = restore_nd_placeholder(then_polars)
     
-    # Process else_expr - replace nd first
+    # Process else_expr - check if it's a nested conditional first
     else_with_placeholder = replace_nd_keyword(else_expr)
-    else_polars = render_polars_expr(else_with_placeholder, substitution_map=substitution_map)
-    else_polars = restore_nd_placeholder(else_polars)
+    # Check if else_expr is a nested conditional (starts with "if")
+    if re.match(r'^\s*if\s+.+\s+then\s+.+\s+else\s+.+\s*$', else_with_placeholder, re.IGNORECASE):
+        # Recursively process nested conditional
+        nested_result = parse_conditional_expr(else_with_placeholder)
+        if nested_result:
+            else_polars = render_conditional_expr(
+                nested_result['condition'],
+                nested_result['then_expr'],
+                nested_result['else_expr'],
+                substitution_map=substitution_map
+            )
+        else:
+            # Fallback to regular expression rendering
+            else_polars = render_polars_expr(else_with_placeholder, substitution_map=substitution_map)
+            else_polars = restore_nd_placeholder(else_polars)
+    else:
+        else_polars = render_polars_expr(else_with_placeholder, substitution_map=substitution_map)
+        else_polars = restore_nd_placeholder(else_polars)
     
     # Build Polars when/then/otherwise
     return f"pl.when({cond_expr}).then({then_polars}).otherwise({else_polars})"
@@ -508,11 +526,13 @@ def parse_conditional_expr(expr: str) -> Optional[Dict]:
     else_expr = if_match.group(3).strip()
     
     # Extract references from all parts
+    # Exclude conditional keywords from refs
+    conditional_keywords = {'t', 'if', 'then', 'else', 'and', 'or', 'not', 'ge', 'gt', 'le', 'lt', 'eq', 'ne', 'nd'}
     refs = []
     for part in [condition, then_expr, else_expr]:
         raw = TOKEN_RE.findall(part)
         for tkn in raw:
-            if tkn.lower() not in ('t', 'if', 'then', 'else', 'and', 'or', 'not') and not _is_strict_number(tkn):
+            if tkn.lower() not in conditional_keywords and not _is_strict_number(tkn):
                 base, _ = parse_time_index(tkn)
                 if base and not _is_strict_number(base):
                     refs.append(tkn)
@@ -562,9 +582,14 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         start_date, end_date = m_date_range.groups()
         return {"type": "date", "filter": {"start": start_date.strip(), "end": end_date.strip()}}
 
-    # 4b) point-in-time (date-indexed) assignment - e.g., variable["2020-01-01"] = value
-    # Match patterns like: var["date"] = expr or var['date'] = expr
+    # 4b) point-in-time (date-indexed) assignment - e.g., variable["2020-01-01"] = value or variable[12mar2020] = value
+    # Match patterns like: var["date"] = expr or var['date'] = expr or var[12mar2020] = expr
+    # First try quoted dates
     m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*=\s*(.+)\s*$', s)
+    if not m_date_assign:
+        # Try unquoted date formats like: 12mar2020, 01Feb2020, 2020Q1, 2020-01-01
+        m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*(\d{1,2}[A-Za-z]{3}\d{4}|\d{4}Q[1-4]|\d{4}-\d{2}-\d{2})\s*\]\s*=\s*(.+)\s*$', s, re.IGNORECASE)
+    
     if m_date_assign:
         target, date_str, rhs = m_date_assign.groups()
         # Parse RHS to extract references
@@ -723,8 +748,13 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
                     if lhs_offset == 0 and rhs_offset > 0:
                         ctx["need_shiftpct_backwards"] = True
         
-        # point-in-time assignment pattern
-        if re.match(r'^\s*[A-Za-z0-9_$]+\s*\[\s*["\'][^"\']+["\']\s*\]\s*=\s*.+\s*$', s):
+        # point-in-time assignment pattern - match both quoted and unquoted dates
+        # Use normalized version to remove "set " prefix
+        normalized_for_point = normalize_formula_text(s)
+        if re.match(r'^\s*[A-Za-z0-9_$]+\s*\[\s*["\'][^"\']+["\']\s*\]\s*=\s*.+\s*$', normalized_for_point):
+            ctx["need_point_in_time_assign"] = True
+        # Also check for unquoted date formats
+        elif re.match(r'^\s*[A-Za-z0-9_$]+\s*\[\s*(\d{1,2}[A-Za-z]{3}\d{4}|\d{4}Q[1-4]|\d{4}-\d{2}-\d{2})\s*\]\s*=\s*.+\s*$', normalized_for_point, re.IGNORECASE):
             ctx["need_point_in_time_assign"] = True
         
         # assign-series pattern
