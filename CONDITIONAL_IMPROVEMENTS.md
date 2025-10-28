@@ -27,6 +27,8 @@ conditional_keywords = {'t', 'if', 'then', 'else', 'and', 'or', 'not', 'ge', 'gt
 
 These keywords are now filtered out when extracting variable references from conditional expressions.
 
+**Note**: While 't' is included in this set for parsing, it receives special handling during code generation (see section 2 below).
+
 ### 2. Time Variable 't' Mapping to DATE Column
 
 **File**: `fame2pygen/fame2py_converter.py`
@@ -57,23 +59,28 @@ def sanitize_func_name(name: Optional[str]) -> str:
     s = str(name)
     s = s.replace("$", "_")
     # Preserve dots in column names (Polars supports them)
+    # Remove special chars except alphanumeric, underscore, and dot
     s = re.sub(r"[^A-Za-z0-9_.]", "", s)
     return s.lower()
 ```
 
-Now `d.a` becomes `D.A` (uppercase with dot preserved) instead of `D_A`.
+Now `d.a` becomes `D.A` (uppercase with dot preserved) instead of `D_A`. The regex pattern `[^A-Za-z0-9_.]` keeps only alphanumeric characters, underscores, and literal dots.
 
 ### 4. Point-in-Time Assignment
 
 **Files**: `fame2pygen/formulas_generator.py` (parsing), `fame2pygen/fame2py_converter.py` (code generation)
 
-The parser already correctly identified point-in-time assignments. The regex pattern was enhanced to handle unquoted date formats:
+The parser already correctly identified point-in-time assignments. Enhanced support for unquoted date formats:
 
 ```python
-m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*(\d{1,2}[A-Za-z]{3}\d{4}|\d{4}Q[1-4]|\d{4}-\d{2}-\d{2})\s*\]\s*=\s*(.+)\s*$', s, re.IGNORECASE)
+# First try quoted dates: var["2020-01-01"] = expr
+m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*=\s*(.+)\s*$', s)
+if not m_date_assign:
+    # Try unquoted date formats: var[12mar2020] = expr
+    m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*(\d{1,2}[A-Za-z]{3}\d{4}|\d{4}Q[1-4]|\d{4}-\d{2}-\d{2})\s*\]\s*=\s*(.+)\s*$', s, re.IGNORECASE)
 ```
 
-This allows formats like `12mar2020`, `2020Q1`, and `2020-01-01`.
+This allows formats like `12mar2020`, `01Feb2020`, `2020Q1`, and `2020-01-01`.
 
 ### 5. Flexible CONVERT Function
 
