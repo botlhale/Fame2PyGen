@@ -446,7 +446,12 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     for t in TOKEN_RE.finditer(all_text):
                         tok = t.group(0)
                         key = tok.lower()
-                        if key == "t":
+                        # In conditionals, standalone "t" (not in index like v[t+1]) should be treated as a column
+                        # Skip "t" only if it's part of a time index pattern
+                        if key == "t" and not re.search(r'\[\s*t\s*[+-]?\d*\s*\]', all_text):
+                            # Standalone t in conditional should be treated as column reference
+                            subs[key] = _operand_to_pl(tok)
+                        elif key == "t":
                             continue
                         if _is_numeric_literal(tok):
                             continue
@@ -511,38 +516,34 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     
                     if unique_ops == {"+"}:
                         args_list = [wrap_operand(opnd) for opnd in operands]
-                        base_expr = args_list[0]
-                        for arg in args_list[1:]:
-                            base_expr = f'{base_expr} + {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
-                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        args_str = ', '.join(args_list)
+                        base_expr = f'ADD_SERIES("{tgt_alias}", {args_str})'
+                        wrapped = wrap_with_date_filter(base_expr, tgt_alias, preserve_existing)
+                        cols.append(f'        {wrapped}')
                         assigned_columns.add(tgt_alias)
                         continue
                     if unique_ops == {"-"}:
                         args_list = [wrap_operand(opnd) for opnd in operands]
-                        base_expr = args_list[0]
-                        for arg in args_list[1:]:
-                            base_expr = f'{base_expr} - {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
-                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        args_str = ', '.join(args_list)
+                        base_expr = f'SUB_SERIES("{tgt_alias}", {args_str})'
+                        wrapped = wrap_with_date_filter(base_expr, tgt_alias, preserve_existing)
+                        cols.append(f'        {wrapped}')
                         assigned_columns.add(tgt_alias)
                         continue
                     if unique_ops == {"*"}:
                         args_list = [wrap_operand(opnd) for opnd in operands]
-                        base_expr = args_list[0]
-                        for arg in args_list[1:]:
-                            base_expr = f'{base_expr} * {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
-                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        args_str = ', '.join(args_list)
+                        base_expr = f'MUL_SERIES("{tgt_alias}", {args_str})'
+                        wrapped = wrap_with_date_filter(base_expr, tgt_alias, preserve_existing)
+                        cols.append(f'        {wrapped}')
                         assigned_columns.add(tgt_alias)
                         continue
                     if unique_ops == {"/"}:
                         args_list = [wrap_operand(opnd) for opnd in operands]
-                        base_expr = args_list[0]
-                        for arg in args_list[1:]:
-                            base_expr = f'{base_expr} / {arg}'
-                        wrapped = wrap_with_date_filter(f'({base_expr})', tgt_alias, preserve_existing)
-                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        args_str = ', '.join(args_list)
+                        base_expr = f'DIV_SERIES("{tgt_alias}", {args_str})'
+                        wrapped = wrap_with_date_filter(base_expr, tgt_alias, preserve_existing)
+                        cols.append(f'        {wrapped}')
                         assigned_columns.add(tgt_alias)
                         continue
                     # mixed -> render polars expr and alias

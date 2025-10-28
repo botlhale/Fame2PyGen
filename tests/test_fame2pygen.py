@@ -293,13 +293,13 @@ def test_date_range_subsetting_basic():
         
         # The v_all computation should not have APPLY_DATE_FILTER since it's under "date *"
         lines = ts_content.split('\n')
-        v_all_lines = [l for l in lines if 'V_ALL' in l and 'alias' in l]
+        v_all_lines = [l for l in lines if 'V_ALL' in l]
         assert len(v_all_lines) > 0
         # v_all should not have APPLY_DATE_FILTER since it's computed under "date *"
         assert not any('APPLY_DATE_FILTER' in l for l in v_all_lines)
         
         # v_2020 should have APPLY_DATE_FILTER
-        v_2020_lines = [l for l in lines if 'V_2020' in l and 'alias' in l]
+        v_2020_lines = [l for l in lines if 'V_2020' in l]
         assert len(v_2020_lines) > 0
         assert any('APPLY_DATE_FILTER' in l for l in v_2020_lines)
         
