@@ -446,12 +446,15 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     for t in TOKEN_RE.finditer(all_text):
                         tok = t.group(0)
                         key = tok.lower()
-                        # In conditionals, standalone "t" (not in index like v[t+1]) should be treated as a column
-                        # Skip "t" only if it's part of a time index pattern
-                        if key == "t" and not re.search(r'\[\s*t\s*[+-]?\d*\s*\]', all_text):
-                            # Standalone t in conditional should be treated as column reference
-                            subs[key] = _operand_to_pl(tok)
-                        elif key == "t":
+                        # In conditionals, 't' represents the current row's date (time variable in FAME)
+                        # It should be mapped to pl.col("DATE"), not skipped or treated as regular column
+                        if key == "t":
+                            # Check if this is part of a time index like v[t+1]
+                            # If so, skip it (it's handled in parse_time_index)
+                            # Otherwise, map it to DATE column
+                            if not re.search(r'\[\s*t\s*[+-]?\d*\s*\]', tok):
+                                # Standalone t in conditional represents current date
+                                subs[key] = 'pl.col("DATE")'
                             continue
                         if _is_numeric_literal(tok):
                             continue
@@ -467,6 +470,22 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                     assigned_columns.add(tgt_alias)
                     continue
+
+                # convert function handling
+                if formula.get("type") == "convert":
+                    params = formula.get("params", [])
+                    if len(params) >= 4:
+                        # First param is the series - convert to uppercase column reference
+                        series_col = sanitize_func_name(params[0]).upper()
+                        # Build CONVERT call with parameters
+                        # CONVERT expects: series (DataFrame subset), as_freq, to_freq, technique, observed
+                        # The first param should be a DataFrame with the series column
+                        params_str = ", ".join([f'"{p}"' if i > 0 else f'pdf.select(pl.col("{series_col}"))' for i, p in enumerate(params)])
+                        expr_text = f'CONVERT({params_str})'
+                        wrapped = wrap_with_date_filter(expr_text, tgt_alias, preserve_existing)
+                        cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                        assigned_columns.add(tgt_alias)
+                        continue
 
                 # if RHS contains special markers, render with render_polars_expr
                 if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase(", "sqrt("]):

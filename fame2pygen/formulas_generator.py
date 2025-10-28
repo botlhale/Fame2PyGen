@@ -37,8 +37,9 @@ def sanitize_func_name(name: Optional[str]) -> str:
         return ""
     s = str(name)
     s = s.replace("$", "_")
-    s = s.replace(".", "_")  # Convert dots to underscores
-    s = re.sub(r"[^A-Za-z0-9_]", "", s)
+    # Preserve dots in column names (Polars supports them)
+    # Only remove other special characters
+    s = re.sub(r"[^A-Za-z0-9_.]", "", s)
     return s.lower()
 
 
@@ -786,9 +787,18 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
         )
     if ctx["has_convert"]:
         defs["CONVERT"] = (
-            "def CONVERT(series: pl.DataFrame, as_freq: str, to_freq: str, technique: str, observed: str) -> pl.Expr:\n"
+            "def CONVERT(series: pl.DataFrame, *args) -> pl.Expr:\n"
             "    import polars_econ as ple\n"
-            "    return ple.convert(series, 'DATE', as_freq=as_freq, to_freq=to_freq, technique=technique, observed=observed)"
+            "    # Handle both standard and custom convert signatures\n"
+            "    if len(args) == 4:\n"
+            "        # Standard: as_freq, to_freq, technique, observed\n"
+            "        return ple.convert(series, 'DATE', as_freq=args[0], to_freq=args[1], technique=args[2], observed=args[3])\n"
+            "    elif len(args) == 3:\n"
+            "        # Custom 3-param variant\n"
+            "        return ple.convert(series, 'DATE', *args)\n"
+            "    else:\n"
+            "        # Generic fallback - pass all args\n"
+            "        return ple.convert(series, 'DATE', *args)"
         )
     if ctx["has_fishvol"]:
         defs["FISHVOL"] = (
