@@ -48,10 +48,11 @@ class TestColumnNameSanitization:
     """Test that column names with dots are properly handled."""
     
     def test_sanitize_preserves_dots(self):
-        """Test that dots in column names are converted to underscores."""
-        # Current behavior: dots are converted to underscores
-        assert sanitize_func_name("d.a") == "d_a"
-        assert sanitize_func_name("my.var.name") == "my_var_name"
+        """Test that dots in column names are preserved (since Polars supports them)."""
+        # New behavior: dots are preserved and lowercased
+        assert sanitize_func_name("d.a") == "d.a"
+        assert sanitize_func_name("my.var.name") == "my.var.name"
+        assert sanitize_func_name("D.A") == "d.a"  # Still lowercased
     
     def test_parse_dotted_column_assignment(self):
         """Test parsing assignment to dotted column name."""

@@ -315,12 +315,13 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str, subs
     # Process condition - substitute variables
     cond_expr = cond_polars
     if substitution_map:
-        for token_match in TOKEN_RE.finditer(cond_polars):
-            token = token_match.group(0)
-            token_lower = token.lower()
-            # Don't skip 't' anymore - let substitution map handle it
-            if token_lower in substitution_map:
-                cond_expr = cond_expr.replace(token, substitution_map[token_lower])
+        # Build a replacement map with proper boundaries
+        # Replace tokens in order from longest to shortest to avoid partial matches
+        sorted_tokens = sorted(substitution_map.keys(), key=lambda x: len(x), reverse=True)
+        for token_lower in sorted_tokens:
+            # Use word boundaries to replace only complete tokens
+            pattern = r'\b' + re.escape(token_lower) + r'\b'
+            cond_expr = re.sub(pattern, substitution_map[token_lower], cond_expr, flags=re.IGNORECASE)
     
     # Process then_expr - replace nd first
     then_with_placeholder = replace_nd_keyword(then_expr)
