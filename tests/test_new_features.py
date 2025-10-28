@@ -23,7 +23,7 @@ def test_conditional_keywords_not_in_refs():
 
 
 def test_conditional_standalone_t_as_column():
-    """Test that standalone 't' in conditionals is treated as a column reference."""
+    """Test that standalone 't' in conditionals is treated as DATE column reference."""
     cmds = ['freq m', 'abc = if t ge 5 then a+b else nd']
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
         ts_file = f.name
@@ -32,8 +32,10 @@ def test_conditional_standalone_t_as_column():
         generate_test_script(cmds, ts_file)
         with open(ts_file, 'r') as f:
             content = f.read()
-        # Check that t is converted to pl.col("T")
-        assert 'pl.col("T")' in content
+        # Check that t is converted to pl.col("DATE") (FAME time variable)
+        assert 'pl.col("DATE")' in content
+        # Should not be pl.col("T")
+        assert 'pl.col("T")' not in content
     finally:
         if os.path.exists(ts_file):
             os.unlink(ts_file)
@@ -59,7 +61,7 @@ def test_nested_conditional_elseif():
 
 
 def test_dot_notation_to_underscore():
-    """Test that dot notation in variable names is converted to underscores."""
+    """Test that dot notation in variable names is preserved (Polars supports dots)."""
     result = parse_fame_formula('result = d.a + b.c')
     assert result is not None
     assert 'd.a' in result["refs"]
@@ -74,12 +76,9 @@ def test_dot_notation_to_underscore():
         generate_test_script(cmds, ts_file)
         with open(ts_file, 'r') as f:
             content = f.read()
-        # Check that dots are converted to underscores
-        assert 'D_A' in content
-        assert 'B_C' in content
-        # Check that original dots are not in output
-        assert 'D.A' not in content
-        assert 'B.C' not in content
+        # Check that dots are preserved in uppercase
+        assert 'D.A' in content
+        assert 'B.C' in content
     finally:
         if os.path.exists(ts_file):
             os.unlink(ts_file)
@@ -290,17 +289,17 @@ def test_comprehensive_example():
         with open(ts_file, 'r') as f:
             ts_content = f.read()
         
-        # Check dot notation conversion
-        assert 'D_A' in ts_content
-        assert 'B_C' in ts_content
-        assert 'RESULT_A' in ts_content
+        # Check dot notation is preserved (uppercase with dots)
+        assert 'D.A' in ts_content
+        assert 'B.C' in ts_content
+        assert 'RESULT.A' in ts_content
         
         # Check point-in-time assignment
         assert 'POINT_IN_TIME_ASSIGN(pdf, "V1", "12mar2020", pl.lit(33))' in ts_content
         
-        # Check conditionals
-        assert 'pl.when(pl.col("T") >= 5)' in ts_content
-        assert 'pl.when(pl.col("T") > 10)' in ts_content
+        # Check conditionals - t should be mapped to DATE
+        assert 'pl.when(pl.col("DATE") >= 5)' in ts_content
+        assert 'pl.when(pl.col("DATE") > 10)' in ts_content
         
         # Check arithmetic functions
         assert 'ADD_SERIES("ADD_RESULT"' in ts_content
