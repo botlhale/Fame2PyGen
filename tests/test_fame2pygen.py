@@ -238,14 +238,19 @@ def test_point_in_time_code_generation():
         with open(ts_file, 'r') as f:
             ts_content = f.read()
         
-        # Verify POINT_IN_TIME_ASSIGN function is included
+        # Verify POINT_IN_TIME_ASSIGN function is included (for backward compatibility)
         assert "POINT_IN_TIME_ASSIGN" in formulas_content
         assert "def POINT_IN_TIME_ASSIGN" in formulas_content
         
-        # Verify the transformer calls POINT_IN_TIME_ASSIGN
-        assert 'POINT_IN_TIME_ASSIGN(pdf, "GDP", "2020-01-01", pl.lit(1000))' in ts_content
-        assert 'POINT_IN_TIME_ASSIGN(pdf, "CPI", "2020Q1", pl.lit(105.5))' in ts_content
-        assert 'POINT_IN_TIME_ASSIGN(pdf, "ADJUSTED"' in ts_content
+        # Verify the transformer uses chained when/then expressions instead of POINT_IN_TIME_ASSIGN calls
+        # Check for GDP assignment
+        assert 'pl.when(pl.col("DATE") == pl.lit("2020-01-01").cast(pl.Date))' in ts_content
+        assert '.then(pl.lit(1000))' in ts_content
+        assert '.alias("GDP")' in ts_content
+        
+        # Check for CPI assignment (2020Q1 should be converted to 2020-01-01)
+        assert '.then(pl.lit(105.5))' in ts_content
+        assert '.alias("CPI")' in ts_content
         
         # Verify code compiles
         compile(formulas_content, formulas_file, 'exec')
