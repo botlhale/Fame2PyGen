@@ -62,6 +62,54 @@ def normalize_formula_text(formula: Optional[str]) -> str:
     return s
 
 
+def convert_fame_date_to_iso(date_str: str) -> str:
+    """
+    Convert FAME date formats to ISO format (YYYY-MM-DD).
+    
+    Supported formats:
+    - 12jul1985 -> 1985-07-12
+    - 01Jan2020 -> 2020-01-01
+    - 2020Q1 -> 2020-01-01 (first day of quarter)
+    - 2020-01-01 -> 2020-01-01 (already ISO)
+    """
+    from datetime import datetime
+    
+    # Try ISO format first (YYYY-MM-DD)
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d')
+        return date_str
+    except ValueError:
+        pass
+    
+    # Try quarterly format (YYYYQN)
+    m = re.match(r'^(\d{4})Q([1-4])$', date_str, re.IGNORECASE)
+    if m:
+        year = int(m.group(1))
+        quarter = int(m.group(2))
+        month = (quarter - 1) * 3 + 1
+        return f"{year}-{month:02d}-01"
+    
+    # Try FAME day-month-year format (DDmmmYYYY)
+    # Examples: 12jul1985, 01Jan2020
+    month_names = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    m = re.match(r'^(\d{1,2})([A-Za-z]{3})(\d{4})$', date_str)
+    if m:
+        day = int(m.group(1))
+        month_str = m.group(2).lower()
+        year = int(m.group(3))
+        
+        if month_str in month_names:
+            month = month_names[month_str]
+            return f"{year}-{month:02d}-{day:02d}"
+    
+    # If we can't parse it, return as-is
+    return date_str
+
+
 def parse_time_index(token: str) -> Tuple[str, int]:
     """
     Parse token forms:
@@ -69,12 +117,14 @@ def parse_time_index(token: str) -> Tuple[str, int]:
       name[t]
       name[t+1]
       name[t-2]
+      name[T-1]  (case-insensitive)
     Returns (base, offset) where offset is integer (0 if absent).
     """
     if not token:
         return "", 0
     t = token.strip()
-    m = re.match(r"^\s*([A-Za-z0-9_$]+)\s*(?:\[\s*t\s*([+-]?\d+)\s*\])?\s*$", t, re.IGNORECASE)
+    # Support both lowercase t and uppercase T, and include dots in variable names
+    m = re.match(r"^\s*([A-Za-z0-9_$.]+)\s*(?:\[\s*[tT]\s*([+-]?\d+)\s*\])?\s*$", t)
     if not m:
         return t, 0
     base = m.group(1)
@@ -89,24 +139,32 @@ def parse_date_index(token: str) -> Tuple[Optional[str], Optional[str]]:
       name["2020-01-01"]
       name['2020Q1']
       name["2020-12-31"]
+      name[12jul1985]  (unquoted date formats)
     Returns (base, date_str) where date_str is the literal date string or None if not date-indexed.
     """
     if not token:
         return None, None
     t = token.strip()
-    # Match variable name followed by date string in brackets (with either single or double quotes)
-    m = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*$', t)
+    # Match variable name (with dots) followed by date string in brackets (with either single or double quotes)
+    m = re.match(r'^\s*([A-Za-z0-9_$.]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*$', t)
     if m:
         base = m.group(1)
         date_str = m.group(2)
+        return base, date_str
+    # Also try unquoted date formats
+    m2 = re.match(r'^\s*([A-Za-z0-9_$.]+)\s*\[\s*(\d{1,2}[A-Za-z]{3}\d{4}|\d{4}Q[1-4]|\d{4}-\d{2}-\d{2})\s*\]\s*$', t, re.IGNORECASE)
+    if m2:
+        base = m2.group(1)
+        date_str = m2.group(2)
         return base, date_str
     return None, None
 
 
 # ---------- Token regex and numeric heuristics ----------
 
-# Match tokens including time-indexed (e.g., var[t+1]) and date-indexed (e.g., var["2020-01-01"])
-TOKEN_RE = re.compile(r'[A-Za-z0-9_$.]+(?:\s*\[\s*(?:t\s*[+-]?\d+|["\'][^"\']+["\']\s*)\])?')
+# Match tokens including time-indexed (e.g., var[t+1], var[T-1]) and date-indexed (e.g., var["2020-01-01"])
+# Support both lowercase t and uppercase T, and include dots in variable names
+TOKEN_RE = re.compile(r'[A-Za-z0-9_$.]+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']\s*)\])?')
 
 def _is_strict_number(tok: str) -> bool:
     return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok.strip()))
@@ -244,6 +302,11 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
             continue
         # Skip __ND_PLACEHOLDER__ - it should remain as-is
         if tok == "__ND_PLACEHOLDER__":
+            parts.append(tok)
+            last = e
+            continue
+        # Skip __CONVERT_PH_*__ placeholders - they should remain as-is
+        if tok.startswith("__CONVERT_PH_"):
             parts.append(tok)
             last = e
             continue
@@ -388,6 +451,80 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
                 ctx["need_shiftpct"] = True
             return f"__SHIFT_PCT__:{ser1}:{ser2}:{offs1}"
 
+    # 2b) Process convert(...) BEFORE tokenization to preserve parameter as strings
+    # This prevents convert parameters from being converted to pl.col()
+    # Use placeholders to protect generated expressions from further tokenization
+    convert_placeholders = {}
+    convert_processed = []
+    convert_idx = 0
+    i = 0
+    while True:
+        m = re.search(r"\bconvert\s*\(", expr[i:], re.IGNORECASE)
+        if not m:
+            convert_processed.append(expr[i:])
+            break
+        s_pos = i + m.start()
+        convert_processed.append(expr[i:s_pos])
+        j = s_pos + len(m.group(0))
+        depth = 1
+        while j < len(expr) and depth > 0:
+            if expr[j] == "(":
+                depth += 1
+            elif expr[j] == ")":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            convert_processed.append(expr[s_pos:])
+            i = len(expr)
+            break
+        inner = expr[s_pos + len(m.group(0)) : j - 1].strip()
+        
+        # Split arguments by comma at depth 0
+        args = []
+        current_arg = []
+        depth2 = 0
+        for ch in inner:
+            if ch == "(":
+                depth2 += 1
+                current_arg.append(ch)
+            elif ch == ")":
+                depth2 -= 1
+                current_arg.append(ch)
+            elif ch == "," and depth2 == 0:
+                args.append("".join(current_arg).strip())
+                current_arg = []
+            else:
+                current_arg.append(ch)
+        if current_arg:
+            args.append("".join(current_arg).strip())
+        
+        # First arg is the series (column), rest should be quoted strings
+        if args:
+            processed_args = []
+            for idx, arg in enumerate(args):
+                if idx == 0:
+                    # First argument - the series column
+                    # Don't apply substitution here - just convert to pl.col()
+                    base, offs = parse_time_index(arg)
+                    col_expr = _token_to_pl_expr(arg)
+                    processed_args.append(col_expr)
+                else:
+                    # Other arguments - should be strings, strip any existing quotes and re-quote
+                    arg_clean = arg.strip().strip('"\'')
+                    processed_args.append(f'"{arg_clean}"')
+            
+            # Create placeholder for this convert expression
+            convert_expr = f"CONVERT({', '.join(processed_args)})"
+            placeholder = f"__CONVERT_PH_{convert_idx}__"
+            convert_placeholders[placeholder] = convert_expr
+            convert_processed.append(placeholder)
+            convert_idx += 1
+        else:
+            convert_processed.append(f"CONVERT({inner})")
+        i = j
+    
+    expr = "".join(convert_processed)
+
     # 3) Replace tokens with placeholders to prevent re-tokenization of generated fragments
     expr_with_ph, placeholders = _build_sub_map_and_placeholders(expr, substitution_map=sub_map)
 
@@ -475,6 +612,10 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
     # 5) Replace placeholders with actual replacement strings (no further tokenization)
     final = combined
     for ph, repl in placeholders.items():
+        final = final.replace(ph, repl)
+    
+    # 6) Restore convert placeholders
+    for ph, repl in convert_placeholders.items():
         final = final.replace(ph, repl)
 
     return final
@@ -587,10 +728,10 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     # 4b) point-in-time (date-indexed) assignment - e.g., variable["2020-01-01"] = value or variable[12mar2020] = value
     # Match patterns like: var["date"] = expr or var['date'] = expr or var[12mar2020] = expr
     # First try quoted dates
-    m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*=\s*(.+)\s*$', s)
+    m_date_assign = re.match(r'^\s*([A-Za-z0-9_$.]+)\s*\[\s*["\']([^"\']+)["\']\s*\]\s*=\s*(.+)\s*$', s)
     if not m_date_assign:
         # Try unquoted date formats like: 12mar2020, 01Feb2020, 2020Q1, 2020-01-01
-        m_date_assign = re.match(r'^\s*([A-Za-z0-9_$]+)\s*\[\s*(\d{1,2}[A-Za-z]{3}\d{4}|\d{4}Q[1-4]|\d{4}-\d{2}-\d{2})\s*\]\s*=\s*(.+)\s*$', s, re.IGNORECASE)
+        m_date_assign = re.match(r'^\s*([A-Za-z0-9_$.]+)\s*\[\s*(\d{1,2}[A-Za-z]{3}\d{4}|\d{4}Q[1-4]|\d{4}-\d{2}-\d{2})\s*\]\s*=\s*(.+)\s*$', s, re.IGNORECASE)
     
     if m_date_assign:
         target, date_str, rhs = m_date_assign.groups()

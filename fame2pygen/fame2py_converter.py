@@ -26,6 +26,7 @@ from .formulas_generator import (
     _shift_pct_re,
     normalize_formula_text,
     FUNCTION_NAMES,
+    convert_fame_date_to_iso,
 )
 
 ARITH_SPLIT_RE = re.compile(r"(\+|\-|\*|/)")
@@ -228,6 +229,13 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     # Track columns that have been assigned to determine if we need to preserve existing values
     assigned_columns = set()
 
+    # Collect point-in-time assignments grouped by target variable
+    point_in_time_by_target = defaultdict(list)
+    for p in parsed:
+        if p.get("type") == "point_in_time_assign":
+            target = p.get("target")
+            point_in_time_by_target[target].append(p)
+
     # Handle multiple SHIFT_PCT_BACKWARDS at the beginning
     if shift_pct_backwards_patterns:
         column_pairs = [(tgt.upper(), pct.upper()) for tgt, ser1, pct, _ in shift_pct_backwards_patterns]
@@ -343,94 +351,8 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         assigned_columns.add(tgt_alias)
                     continue
 
-                # point-in-time assignment handling
+                # point-in-time assignment handling - skip here, will be handled after all levels
                 if formula.get("type") == "point_in_time_assign":
-                    date_str = formula.get("date")
-                    rhs = formula.get("rhs", "")
-                    # Check if RHS is a simple numeric literal
-                    if _is_strict_number(rhs.strip()):
-                        # Simple numeric value - use pl.lit()
-                        expr_text = f"pl.lit({rhs.strip()})"
-                    else:
-                        # Check if RHS contains date-indexed references
-                        has_date_indexed = False
-                        for tok_match in TOKEN_RE.finditer(rhs):
-                            tok = tok_match.group(0)
-                            base, date_idx = parse_date_index(tok)
-                            if base:
-                                has_date_indexed = True
-                                break
-                        
-                        if has_date_indexed:
-                            # Build a lambda that extracts values at specific dates
-                            # Convert each date-indexed token to a filter + extraction
-                            expr_parts = []
-                            last_pos = 0
-                            for tok_match in TOKEN_RE.finditer(rhs):
-                                tok = tok_match.group(0)
-                                start, end = tok_match.span()
-                                # Add text before this token
-                                expr_parts.append(rhs[last_pos:start])
-                                
-                                base, date_idx = parse_date_index(tok)
-                                if base:
-                                    # Replace with expression that extracts value at specific date
-                                    base_col = sanitize_func_name(base).upper()
-                                    # Parse date and create proper date object in the lambda
-                                    # Convert date_str to Python date() constructor
-                                    import re as _re_mod
-                                    try:
-                                        # Try YYYY-MM-DD format
-                                        from datetime import datetime as _dt
-                                        parsed_date = _dt.strptime(date_idx, '%Y-%m-%d').date()
-                                        date_expr = f"date({parsed_date.year}, {parsed_date.month}, {parsed_date.day})"
-                                    except ValueError:
-                                        # Try YYYYQN format
-                                        m = _re_mod.match(r'^(\d{4})Q([1-4])$', date_idx, _re_mod.IGNORECASE)
-                                        if m:
-                                            year = int(m.group(1))
-                                            quarter = int(m.group(2))
-                                            month = (quarter - 1) * 3 + 1
-                                            date_expr = f"date({year}, {month}, 1)"
-                                        else:
-                                            # Fallback - use string
-                                            date_expr = f'"{date_idx}"'
-                                    # Use filter and item() to extract the value
-                                    date_filter_expr = f'df.filter(pl.col("DATE") == {date_expr}).select(pl.col("{base_col}")).item()'
-                                    expr_parts.append(date_filter_expr)
-                                else:
-                                    # Regular token - convert to pl.col()
-                                    if not _is_numeric_literal(tok) and tok.lower() != "t":
-                                        col_name = sanitize_func_name(tok).upper()
-                                        expr_parts.append(f'pl.col("{col_name}")')
-                                    else:
-                                        expr_parts.append(tok)
-                                
-                                last_pos = end
-                            
-                            # Add remaining text
-                            expr_parts.append(rhs[last_pos:])
-                            expr_body = "".join(expr_parts)
-                            # Wrap in lambda
-                            expr_text = f"lambda df: {expr_body}"
-                        else:
-                            # No date-indexed references - normal expression
-                            subs: Dict[str, str] = {}
-                            for t in TOKEN_RE.finditer(rhs):
-                                tok = t.group(0)
-                                key = tok.lower()
-                                if key == "t":
-                                    continue
-                                if _is_numeric_literal(tok):
-                                    continue
-                                if key in FUNCTION_NAMES:
-                                    continue
-                                subs[key] = _operand_to_pl(tok)
-                            expr_text = render_polars_expr(rhs, substitution_map=subs, memory=None, ctx=None)
-                    
-                    # Generate POINT_IN_TIME_ASSIGN call - this needs to be outside with_columns
-                    # So we'll handle it separately after the level processing
-                    lines.append(f'    pdf = POINT_IN_TIME_ASSIGN(pdf, "{tgt_alias}", "{date_str}", {expr_text})\n')
                     continue
 
                 # conditional expression handling
@@ -602,6 +524,73 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
 
             if cols:
                 lines.append("    pdf = pdf.with_columns([\n" + ",\n".join(cols) + "\n    ])\n")
+
+    # Process point-in-time assignments grouped by target variable
+    # Generate chained when/then expressions for each target
+    for target, assignments in sorted(point_in_time_by_target.items()):
+        if not assignments:
+            continue
+        
+        # Sort assignments by original order
+        assignments.sort(key=lambda x: x.get("original_order", 0))
+        
+        tgt_alias = sanitize_func_name(target).upper()
+        lines.append(f"    # Point-in-time assignments for {tgt_alias}\n")
+        
+        # Build chained when/then expression
+        when_conditions = []
+        for assignment in assignments:
+            date_str = assignment.get("date", "")
+            rhs = assignment.get("rhs", "").strip()
+            
+            # Convert FAME date to ISO format
+            iso_date = convert_fame_date_to_iso(date_str)
+            
+            # Generate the value expression
+            if _is_strict_number(rhs):
+                value_expr = f"pl.lit({rhs})"
+            else:
+                # Build substitution map for RHS
+                subs: Dict[str, str] = {}
+                for t in TOKEN_RE.finditer(rhs):
+                    tok = t.group(0)
+                    key = tok.lower()
+                    if key == "t":
+                        continue
+                    if _is_numeric_literal(tok):
+                        continue
+                    if key in FUNCTION_NAMES:
+                        continue
+                    subs[key] = _operand_to_pl(tok)
+                value_expr = render_polars_expr(rhs, substitution_map=subs, memory=None, ctx=None)
+            
+            when_conditions.append((iso_date, value_expr))
+        
+        # Generate the chained when/then expression
+        # Start with existing value if column exists, otherwise start fresh
+        chain_parts = []
+        for idx, (iso_date, value_expr) in enumerate(when_conditions):
+            if idx == 0:
+                chain_parts.append(f'        pl.when(pl.col("DATE") == pl.lit("{iso_date}").cast(pl.Date))')
+                chain_parts.append(f'    .then({value_expr})')
+            else:
+                chain_parts.append(f'    .when(pl.col("DATE") == pl.lit("{iso_date}").cast(pl.Date))')
+                chain_parts.append(f'    .then({value_expr})')
+        
+        # Add otherwise clause to preserve existing values if column already exists
+        if tgt_alias in assigned_columns:
+            chain_parts.append(f'    .otherwise(pl.col("{tgt_alias}"))')
+        else:
+            # If column doesn't exist yet, set to null for other dates
+            chain_parts.append(f'    .otherwise(pl.lit(None))')
+        
+        chain_parts.append(f'    .alias("{tgt_alias}")')
+        
+        lines.append("    pdf = pdf.with_columns([\n")
+        lines.append("\n".join(chain_parts) + "\n")
+        lines.append("    ])\n")
+        
+        assigned_columns.add(tgt_alias)
 
     lines.append("    return pdf\n")
     content = "".join(lines)
