@@ -226,10 +226,13 @@ def test_point_in_time_unquoted_date_generation():
             formulas_content = f.read()
         assert "def POINT_IN_TIME_ASSIGN" in formulas_content
         
-        # Check transformer uses POINT_IN_TIME_ASSIGN
+        # Check transformer uses chained when/then expressions
         with open(ts_file, 'r') as f:
             ts_content = f.read()
-        assert 'POINT_IN_TIME_ASSIGN(pdf, "A", "12mar2020", pl.lit(33))' in ts_content
+        # Check for the when/then/otherwise chain pattern
+        assert 'pl.when(pl.col("DATE") == pl.lit("2020-03-12").cast(pl.Date))' in ts_content
+        assert '.then(pl.lit(33))' in ts_content
+        assert '.alias("A")' in ts_content
     finally:
         if os.path.exists(ts_file):
             os.unlink(ts_file)
@@ -294,8 +297,10 @@ def test_comprehensive_example():
         assert 'B.C' in ts_content
         assert 'RESULT.A' in ts_content
         
-        # Check point-in-time assignment
-        assert 'POINT_IN_TIME_ASSIGN(pdf, "V1", "12mar2020", pl.lit(33))' in ts_content
+        # Check point-in-time assignment uses when/then chain
+        assert 'pl.when(pl.col("DATE") == pl.lit("2020-03-12").cast(pl.Date))' in ts_content
+        assert '.then(pl.lit(33))' in ts_content
+        assert '.alias("V1")' in ts_content
         
         # Check conditionals - t should be mapped to DATE
         assert 'pl.when(pl.col("DATE") >= 5)' in ts_content
