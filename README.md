@@ -284,6 +284,8 @@ commands = [
 ]
 ```
 
+**Note**: Complex nested conditionals inside LSUM arguments (like the example above) may require manual refinement after generation. The LSUM function itself and simple arguments are fully supported. For complex formulas, the generated code provides a good starting point that can be adjusted as needed.
+
 
 ### Usage Example
 
