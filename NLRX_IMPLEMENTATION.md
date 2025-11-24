@@ -46,7 +46,7 @@ Added support for three new FAME functions to Fame2PyGen:
 
 ## Problem Statement Pattern
 
-The implementation correctly handles this FAME scripting pattern:
+The implementation correctly handles the core FAME scripting pattern:
 
 ```
 start = firstvalue(a)
@@ -59,8 +59,11 @@ set <date start to end> b3 = 0
 set <date start to end> b4 = 0
 set <date start to end> c = 0
 set <date start to end> d = 0
-a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d, begsa, endmona)
+# Maps to ple.nlrx(df, lambda20, y=a, w1=b1, w2=b2, w3=b3, w4=b4, gss=c, gpr=d)
+a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d)
 ```
+
+**Note**: The implementation supports the documented `ple.nlrx` signature with 8 parameters total (lambda + 7 keyword parameters: y, w1, w2, w3, w4, gss, gpr). Additional parameters beyond this would require an extended polars_econ implementation.
 
 ## Generated Python Code
 

@@ -143,7 +143,9 @@ class TestCodeGeneration:
             "set <date start to end> b4 = 0",
             "set <date start to end> c = 0",
             "set <date start to end> d = 0",
-            "a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d, begsa, endmona)"
+            # Note: Using only 8 params (lambda + 7 keyword args) to match documented ple.nlrx signature
+            # Additional params like begsa, endmona would require extended polars_econ.nlrx signature
+            "a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d)"
         ]
         
         # Create temporary files

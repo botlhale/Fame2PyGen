@@ -41,8 +41,9 @@ fame_commands = [
     "date *",
     
     # Call nlrx function with all parameters
-    # Note: In this simplified example, we're using 8 params (minimum required)
-    # The actual polars_econ.nlrx may accept additional parameters
+    # Note: Using 8 params (lambda + 7 keyword args) matching documented ple.nlrx signature
+    # The polars_econ.nlrx signature supports: y, w1, w2, w3, w4, gss, gpr
+    # Additional parameters would require extended polars_econ implementation
     "a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d)"
 ]
 
