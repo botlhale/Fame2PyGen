@@ -340,6 +340,8 @@ def _split_lsum_args(inner: str) -> List[str]:
     
     Example: "(if exists(A) then A else 0),(if exists(B) then B else 0)" 
     -> ["(if exists(A) then A else 0)", "(if exists(B) then B else 0)"]
+    
+    Returns empty list if parentheses are unbalanced.
     """
     args = []
     depth = 0
@@ -350,12 +352,22 @@ def _split_lsum_args(inner: str) -> List[str]:
             current.append(ch)
         elif ch == ")":
             depth -= 1
+            # Check for unbalanced closing parenthesis
+            if depth < 0:
+                # Return the whole string as a single argument if unbalanced
+                return [inner.strip()] if inner.strip() else []
             current.append(ch)
         elif ch == "," and depth == 0:
             args.append("".join(current).strip())
             current = []
         else:
             current.append(ch)
+    
+    # Check for unbalanced opening parenthesis
+    if depth != 0:
+        # Return the whole string as a single argument if unbalanced
+        return [inner.strip()] if inner.strip() else []
+    
     if current:
         args.append("".join(current).strip())
     return args
@@ -1521,11 +1533,9 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(
             '    """\n'
             "    if not args:\n"
             "        return pl.lit(0)\n"
-            "    # Replace nulls with 0 and sum all arguments\n"
-            "    result = args[0].fill_null(0)\n"
-            "    for arg in args[1:]:\n"
-            "        result = result + arg.fill_null(0)\n"
-            "    return result"
+            "    # Use pl.sum_horizontal for efficient row-wise summation with null handling\n"
+            "    # fill_null(0) ensures nulls are treated as 0\n"
+            "    return pl.sum_horizontal([arg.fill_null(0) for arg in args])"
         )
     
     if ctx["has_exists"]:
