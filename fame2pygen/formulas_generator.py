@@ -22,13 +22,19 @@ from typing import Dict, List, Tuple, Optional
 # ---------- Constants ----------
 
 # Recognized FAME function names that should not be tokenized as variables
-FUNCTION_NAMES = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt", "nlrx", "firstvalue", "lastvalue"}
+FUNCTION_NAMES = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt", "nlrx", "firstvalue", "lastvalue", "lsum", "exists", "dateof"}
 
 # Logical operators that should be preserved during tokenization
 LOGICAL_OPERATORS = {"or", "and"}
 
+# FAME special values that represent missing/null data
+FAME_SPECIAL_VALUES = {"na", "nc", "nd"}
+
 # All keywords that should not be treated as variable references
-FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS
+# Including conditional keywords and comparison operators
+CONDITIONAL_KEYWORDS = {"if", "then", "else"}
+COMPARISON_OPERATORS = {"ge", "gt", "le", "lt", "eq", "ne"}
+FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS | CONDITIONAL_KEYWORDS | COMPARISON_OPERATORS
 
 # ---------- Utilities ----------
 
@@ -184,12 +190,12 @@ def _is_numeric_literal(tok: str) -> bool:
 def _token_to_pl_expr(tok: str) -> str:
     """
     Convert a token (maybe time indexed) to pl expression text:
-      - 'nd' (FAME null/missing) -> pl.lit(None)
+      - 'nd', 'na', 'nc' (FAME null/missing values) -> pl.lit(None)
       - numeric literal -> literal number (kept as-is)
       - series id or name -> pl.col("NAME").shift(-offset) (offset from [t+N] or [t-N])
     """
-    # Handle 'nd' keyword
-    if tok.lower() == 'nd':
+    # Handle FAME special values (NA, NC, ND all represent null/missing)
+    if tok.lower() in FAME_SPECIAL_VALUES:
         return "pl.lit(None)"
     
     base, offs = parse_time_index(tok)
@@ -300,8 +306,8 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
             parts.append(tok)
             last = e
             continue
-        # Skip __ND_PLACEHOLDER__ - it should remain as-is
-        if tok == "__ND_PLACEHOLDER__":
+        # Skip FAME special value placeholders - they should remain as-is
+        if tok in ("__ND_PLACEHOLDER__", "__NA_PLACEHOLDER__", "__NC_PLACEHOLDER__"):
             parts.append(tok)
             last = e
             continue
@@ -328,6 +334,33 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
     return "".join(parts), placeholders
 
 
+def _split_lsum_args(inner: str) -> List[str]:
+    """
+    Split LSUM arguments by top-level commas, respecting nested parentheses.
+    
+    Example: "(if exists(A) then A else 0),(if exists(B) then B else 0)" 
+    -> ["(if exists(A) then A else 0)", "(if exists(B) then B else 0)"]
+    """
+    args = []
+    depth = 0
+    current = []
+    for ch in inner:
+        if ch == "(":
+            depth += 1
+            current.append(ch)
+        elif ch == ")":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        args.append("".join(current).strip())
+    return args
+
+
 # ---------- SHIFT_PCT detection regex ----------
 
 _shift_pct_re = re.compile(
@@ -344,8 +377,8 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str, subs
     
     Handles:
     - Comparison operators: ge, gt, le, lt, eq, ne
-    - 'nd' keyword mapping to pl.lit(None)
-    - FAME functions: dateof, make, date, contain, end
+    - FAME special values: NA, NC, ND (all represent null/missing in FAME)
+    - FAME functions: dateof, make, date, contain, end, exists, lsum
     - Variable references with substitution
     """
     # Parse and render condition
@@ -365,15 +398,21 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str, subs
         # Use word boundaries to avoid partial matches
         cond_polars = re.sub(r'\b' + fame_op + r'\b', py_op, cond_polars, flags=re.IGNORECASE)
     
-    # Handle 'nd' keyword (null/missing in FAME) -> pl.lit(None)
-    # Do this BEFORE tokenization to avoid splitting it up
-    def replace_nd_keyword(expr: str) -> str:
-        # Replace 'nd' keyword with a placeholder that won't be tokenized
-        return re.sub(r'\bnd\b', '__ND_PLACEHOLDER__', expr, flags=re.IGNORECASE)
+    # Handle FAME special values (NA, NC, ND - all represent null/missing in FAME) -> pl.lit(None)
+    # Do this BEFORE tokenization to avoid splitting them up
+    def replace_fame_special_values(expr: str) -> str:
+        # Replace NA, NC, ND keywords with placeholders that won't be tokenized
+        result = re.sub(r'\bnd\b', '__ND_PLACEHOLDER__', expr, flags=re.IGNORECASE)
+        result = re.sub(r'\bna\b', '__NA_PLACEHOLDER__', result, flags=re.IGNORECASE)
+        result = re.sub(r'\bnc\b', '__NC_PLACEHOLDER__', result, flags=re.IGNORECASE)
+        return result
     
-    def restore_nd_placeholder(expr: str) -> str:
-        # Restore placeholder to pl.lit(None)
-        return expr.replace('__ND_PLACEHOLDER__', 'pl.lit(None)')
+    def restore_fame_special_placeholders(expr: str) -> str:
+        # Restore placeholders to pl.lit(None)
+        result = expr.replace('__ND_PLACEHOLDER__', 'pl.lit(None)')
+        result = result.replace('__NA_PLACEHOLDER__', 'pl.lit(None)')
+        result = result.replace('__NC_PLACEHOLDER__', 'pl.lit(None)')
+        return result
     
     # Process condition - substitute variables
     cond_expr = cond_polars
@@ -386,13 +425,13 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str, subs
             pattern = r'\b' + re.escape(token_lower) + r'\b'
             cond_expr = re.sub(pattern, substitution_map[token_lower], cond_expr, flags=re.IGNORECASE)
     
-    # Process then_expr - replace nd first
-    then_with_placeholder = replace_nd_keyword(then_expr)
+    # Process then_expr - replace special values first
+    then_with_placeholder = replace_fame_special_values(then_expr)
     then_polars = render_polars_expr(then_with_placeholder, substitution_map=substitution_map)
-    then_polars = restore_nd_placeholder(then_polars)
+    then_polars = restore_fame_special_placeholders(then_polars)
     
     # Process else_expr - check if it's a nested conditional first
-    else_with_placeholder = replace_nd_keyword(else_expr)
+    else_with_placeholder = replace_fame_special_values(else_expr)
     # Check if else_expr is a nested conditional (starts with "if")
     if re.match(r'^\s*if\s+.+\s+then\s+.+\s+else\s+.+\s*$', else_with_placeholder, re.IGNORECASE):
         # Recursively process nested conditional
@@ -407,10 +446,10 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str, subs
         else:
             # Fallback to regular expression rendering
             else_polars = render_polars_expr(else_with_placeholder, substitution_map=substitution_map)
-            else_polars = restore_nd_placeholder(else_polars)
+            else_polars = restore_fame_special_placeholders(else_polars)
     else:
         else_polars = render_polars_expr(else_with_placeholder, substitution_map=substitution_map)
-        else_polars = restore_nd_placeholder(else_polars)
+        else_polars = restore_fame_special_placeholders(else_polars)
     
     # Build Polars when/then/otherwise
     return f"pl.when({cond_expr}).then({then_polars}).otherwise({else_polars})"
@@ -604,6 +643,67 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
     
     combined = "".join(sqrt_parts)
 
+    # 4d) Process exists(...) constructs - converts to column existence check
+    exists_parts: List[str] = []
+    i = 0
+    while True:
+        m = re.search(r"\bexists\s*\(", combined[i:], re.IGNORECASE)
+        if not m:
+            exists_parts.append(combined[i:])
+            break
+        s_pos = i + m.start()
+        exists_parts.append(combined[i:s_pos])
+        j = s_pos + len(m.group(0))
+        depth = 1
+        while j < len(combined) and depth > 0:
+            if combined[j] == "(":
+                depth += 1
+            elif combined[j] == ")":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            exists_parts.append(combined[s_pos:])
+            i = len(combined)
+            break
+        inner = combined[s_pos + len(m.group(0)) : j - 1].strip()
+        # EXISTS(col) -> col.is_not_null() in Polars context
+        # The actual column check is done at runtime in the helper function
+        exists_parts.append(f"EXISTS({inner})")
+        i = j
+    
+    combined = "".join(exists_parts)
+
+    # 4e) Process lsum(...) constructs - sums multiple arguments with null handling
+    lsum_parts: List[str] = []
+    i = 0
+    while True:
+        m = re.search(r"\blsum\s*\(", combined[i:], re.IGNORECASE)
+        if not m:
+            lsum_parts.append(combined[i:])
+            break
+        s_pos = i + m.start()
+        lsum_parts.append(combined[i:s_pos])
+        j = s_pos + len(m.group(0))
+        depth = 1
+        while j < len(combined) and depth > 0:
+            if combined[j] == "(":
+                depth += 1
+            elif combined[j] == ")":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            lsum_parts.append(combined[s_pos:])
+            i = len(combined)
+            break
+        inner = combined[s_pos + len(m.group(0)) : j - 1].strip()
+        # Split arguments at top-level commas (respecting nested parentheses)
+        args = _split_lsum_args(inner)
+        # LSUM sums all arguments, treating null as 0
+        lsum_parts.append(f"LSUM({', '.join(args)})")
+        i = j
+    
+    combined = "".join(lsum_parts)
+
     # 4c) Handle logical operators: 'or' -> '|', 'and' -> '&'
     # Replace whole word 'or' and 'and' with proper Polars operators
     combined = re.sub(r'\bor\b', '|', combined, flags=re.IGNORECASE)
@@ -669,15 +769,15 @@ def parse_conditional_expr(expr: str) -> Optional[Dict]:
     else_expr = if_match.group(3).strip()
     
     # Extract references from all parts
-    # Exclude conditional keywords from refs
-    conditional_keywords = {'t', 'if', 'then', 'else', 'and', 'or', 'not', 'ge', 'gt', 'le', 'lt', 'eq', 'ne', 'nd'}
+    # Exclude conditional keywords and FAME special values from refs
+    conditional_keywords = {'t', 'if', 'then', 'else', 'and', 'or', 'not', 'ge', 'gt', 'le', 'lt', 'eq', 'ne'} | FAME_SPECIAL_VALUES | FUNCTION_NAMES
     refs = []
     for part in [condition, then_expr, else_expr]:
         raw = TOKEN_RE.findall(part)
         for tkn in raw:
             if tkn.lower() not in conditional_keywords and not _is_strict_number(tkn):
                 base, _ = parse_time_index(tkn)
-                if base and not _is_strict_number(base):
+                if base and not _is_strict_number(base) and base.lower() not in conditional_keywords:
                     refs.append(tkn)
     
     return {
@@ -849,8 +949,8 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             return {"type": "assign_series", "target": target, "rhs": rhs_tok, "original_rhs": rhs}
         # fallback simple / arithmetic: collect refs tokens
         raw = TOKEN_RE.findall(rhs)
-        # Filter out function names and logical operators from refs
-        refs = [tkn for tkn in raw if tkn.lower() != "t" and tkn.lower() not in FUNCTION_KEYWORDS]
+        # Filter out function names, logical operators, and FAME special values from refs
+        refs = [tkn for tkn in raw if tkn.lower() != "t" and tkn.lower() not in FUNCTION_KEYWORDS and tkn.lower() not in FAME_SPECIAL_VALUES]
         return {"type": "simple", "target": lhs, "rhs": rhs, "original_rhs": rhs, "refs": refs}
 
     return None
@@ -875,6 +975,8 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
         "has_nlrx": False,
         "has_firstvalue": False,
         "has_lastvalue": False,
+        "has_lsum": False,
+        "has_exists": False,
         "need_shiftpct": False,
         "need_shiftpct_backwards": False,
         "need_assign": False,
@@ -907,6 +1009,10 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
             ctx["has_firstvalue"] = True
         if re.search(r"\blastvalue\s*\(", s, re.IGNORECASE):
             ctx["has_lastvalue"] = True
+        if re.search(r"\blsum\s*\(", s, re.IGNORECASE):
+            ctx["has_lsum"] = True
+        if re.search(r"\bexists\s*\(", s, re.IGNORECASE):
+            ctx["has_exists"] = True
         
         # SHIFT_PCT detection with enhanced pattern recognition - also detect in assignments
         normalized = normalize_formula_text(s)
@@ -1397,6 +1503,50 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(
             "        Expression that evaluates to the last non-null value\n"
             '    """\n'
             "    return expr.drop_nulls().last()"
+        )
+    
+    if ctx["has_lsum"]:
+        defs["LSUM"] = (
+            "def LSUM(*args) -> pl.Expr:\n"
+            '    """Sum multiple expressions, treating null values as 0.\n'
+            "    \n"
+            "    FAME LSUM function implementation. Sums all provided expressions,\n"
+            "    where each null value is treated as 0.\n"
+            "    \n"
+            "    Args:\n"
+            "        *args: Polars expressions to sum\n"
+            "    \n"
+            "    Returns:\n"
+            "        Expression that evaluates to the sum of all arguments\n"
+            '    """\n'
+            "    if not args:\n"
+            "        return pl.lit(0)\n"
+            "    # Replace nulls with 0 and sum all arguments\n"
+            "    result = args[0].fill_null(0)\n"
+            "    for arg in args[1:]:\n"
+            "        result = result + arg.fill_null(0)\n"
+            "    return result"
+        )
+    
+    if ctx["has_exists"]:
+        defs["EXISTS"] = (
+            "def EXISTS(expr: pl.Expr) -> pl.Expr:\n"
+            '    """Check if a series/column has non-null values at each row.\n'
+            "    \n"
+            "    FAME EXISTS function implementation. Returns True where the\n"
+            "    expression has a non-null value, False otherwise.\n"
+            "    \n"
+            "    Note: In FAME, exists(X) checks if variable X exists in the database.\n"
+            "    In Polars context, we interpret this as checking if the column value\n"
+            "    is not null (the column existence is checked at a higher level).\n"
+            "    \n"
+            "    Args:\n"
+            "        expr: Polars expression to check\n"
+            "    \n"
+            "    Returns:\n"
+            "        Boolean expression that is True where values are non-null\n"
+            '    """\n'
+            "    return expr.is_not_null()"
         )
 
     return defs
