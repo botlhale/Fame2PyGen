@@ -22,7 +22,7 @@ from typing import Dict, List, Tuple, Optional
 # ---------- Constants ----------
 
 # Recognized FAME function names that should not be tokenized as variables
-FUNCTION_NAMES = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt"}
+FUNCTION_NAMES = {"pct", "convert", "fishvol_rebase", "chain", "mchain", "sqrt", "nlrx", "firstvalue", "lastvalue"}
 
 # Logical operators that should be preserved during tokenization
 LOGICAL_OPERATORS = {"or", "and"}
@@ -782,6 +782,33 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             variable_refs = [s for s in vols + prices if not _is_strict_number(s)]
             return {"type": "fishvol", "target": target, "refs": variable_refs, "pairs": pairs, "year": year, "trailing_op": trailing.strip() if trailing else None}
 
+    # 6b) firstvalue and lastvalue functions
+    m_firstvalue = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*firstvalue\(([^)]+)\)\s*$", s, re.IGNORECASE)
+    if m_firstvalue:
+        target, series = m_firstvalue.groups()
+        series = series.strip()
+        return {"type": "firstvalue", "target": target, "refs": [series], "series": series}
+    
+    m_lastvalue = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*lastvalue\(([^)]+)\)\s*$", s, re.IGNORECASE)
+    if m_lastvalue:
+        target, series = m_lastvalue.groups()
+        series = series.strip()
+        return {"type": "lastvalue", "target": target, "refs": [series], "series": series}
+    
+    # 6c) nlrx function - matches nlrx(lambda_var, y_var, w1_var, w2_var, w3_var, w4_var, gss_var, gpr_var)
+    m_nlrx = re.match(r"^\s*([A-Za-z0-9_$]+)\s*=\s*nlrx\((.+)\)\s*$", s, re.IGNORECASE)
+    if m_nlrx:
+        target, args_str = m_nlrx.groups()
+        # Split arguments by comma
+        args = [a.strip() for a in args_str.split(",")]
+        if len(args) >= 8:  # lambda, y, w1, w2, w3, w4, gss, gpr
+            return {
+                "type": "nlrx",
+                "target": target,
+                "refs": args,  # All arguments are variable references
+                "params": args  # Keep params for later use
+            }
+
     # 7) Check for SHIFT_PCT pattern explicitly - extract RHS first if assignment present
     if "=" in s:
         lhs_temp, rhs_temp = s.split("=", 1)
@@ -845,6 +872,9 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
         "has_fishvol": False,
         "has_pct": False,
         "has_sqrt": False,
+        "has_nlrx": False,
+        "has_firstvalue": False,
+        "has_lastvalue": False,
         "need_shiftpct": False,
         "need_shiftpct_backwards": False,
         "need_assign": False,
@@ -871,6 +901,12 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
             ctx["has_pct"] = True
         if re.search(r"\bsqrt\s*\(", s, re.IGNORECASE):
             ctx["has_sqrt"] = True
+        if re.search(r"\bnlrx\s*\(", s, re.IGNORECASE):
+            ctx["has_nlrx"] = True
+        if re.search(r"\bfirstvalue\s*\(", s, re.IGNORECASE):
+            ctx["has_firstvalue"] = True
+        if re.search(r"\blastvalue\s*\(", s, re.IGNORECASE):
+            ctx["has_lastvalue"] = True
         
         # SHIFT_PCT detection with enhanced pattern recognition - also detect in assignments
         normalized = normalize_formula_text(s)
@@ -1285,5 +1321,82 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(
         "        (pl.col(date_col) >= start) & (pl.col(date_col) <= end)\n"
         "    ).then(expr).otherwise(otherwise_expr)"
     )
+    
+    if ctx["has_nlrx"]:
+        defs["NLRX"] = (
+            "def NLRX(df: pl.DataFrame, lamb: pl.Expr, y: pl.Expr, w1: pl.Expr, w2: pl.Expr, w3: pl.Expr, w4: pl.Expr, gss: pl.Expr, gpr: pl.Expr) -> pl.DataFrame:\n"
+            '    """Wrapper for polars_econ nlrx function.\n'
+            "    \n"
+            "    Args:\n"
+            "        df: Input DataFrame\n"
+            "        lamb: Lambda parameter (int or float expression)\n"
+            "        y: Y series column name\n"
+            "        w1: W1 series column name\n"
+            "        w2: W2 series column name\n"
+            "        w3: W3 series column name\n"
+            "        w4: W4 series column name\n"
+            "        gss: GSS series column name\n"
+            "        gpr: GPR series column name\n"
+            "    \n"
+            "    Returns:\n"
+            "        DataFrame with nlrx result\n"
+            '    """\n'
+            "    import polars_econ as ple\n"
+            "    # Extract lambda value if it's a column, otherwise use as literal\n"
+            "    if isinstance(lamb, pl.Expr):\n"
+            "        # If lamb is an expression, evaluate it to get the value\n"
+            "        lamb_val = df.select(lamb).item()\n"
+            "    else:\n"
+            "        lamb_val = lamb\n"
+            "    \n"
+            "    # Extract column names from expressions\n"
+            "    def get_col_name(expr):\n"
+            "        # Simple heuristic: if it's a column reference, extract the name\n"
+            "        # This works for pl.col(\"NAME\") expressions\n"
+            "        expr_str = str(expr)\n"
+            "        import re\n"
+            "        m = re.search(r'col\\([\"\\']([^\"\\']*)[\"\\'\\)]', expr_str)\n"
+            "        if m:\n"
+            "            return m.group(1)\n"
+            "        return None\n"
+            "    \n"
+            "    y_col = get_col_name(y) or 'y'\n"
+            "    w1_col = get_col_name(w1) or 'w1'\n"
+            "    w2_col = get_col_name(w2) or 'w2'\n"
+            "    w3_col = get_col_name(w3) or 'w3'\n"
+            "    w4_col = get_col_name(w4) or 'w4'\n"
+            "    gss_col = get_col_name(gss) or 'gss'\n"
+            "    gpr_col = get_col_name(gpr) or 'gpr'\n"
+            "    \n"
+            "    return ple.nlrx(df, lamb_val, y=y_col, w1=w1_col, w2=w2_col, w3=w3_col, w4=w4_col, gss=gss_col, gpr=gpr_col)"
+        )
+    
+    if ctx["has_firstvalue"]:
+        defs["FIRSTVALUE"] = (
+            "def FIRSTVALUE(expr: pl.Expr) -> pl.Expr:\n"
+            '    """Get the first non-null value from a series.\n'
+            "    \n"
+            "    Args:\n"
+            "        expr: Polars expression to get first value from\n"
+            "    \n"
+            "    Returns:\n"
+            "        Expression that evaluates to the first non-null value\n"
+            '    """\n'
+            "    return expr.drop_nulls().first()"
+        )
+    
+    if ctx["has_lastvalue"]:
+        defs["LASTVALUE"] = (
+            "def LASTVALUE(expr: pl.Expr) -> pl.Expr:\n"
+            '    """Get the last non-null value from a series.\n'
+            "    \n"
+            "    Args:\n"
+            "        expr: Polars expression to get last value from\n"
+            "    \n"
+            "    Returns:\n"
+            "        Expression that evaluates to the last non-null value\n"
+            '    """\n'
+            "    return expr.drop_nulls().last()"
+        )
 
     return defs

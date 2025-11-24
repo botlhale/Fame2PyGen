@@ -408,6 +408,58 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         cols.append(f'        {wrapped}.alias("{tgt_alias}")')
                         assigned_columns.add(tgt_alias)
                         continue
+                
+                # firstvalue function handling
+                if formula.get("type") == "firstvalue":
+                    series = formula.get("series", "")
+                    series_col = sanitize_func_name(series).upper()
+                    expr_text = f'FIRSTVALUE(pl.col("{series_col}"))'
+                    # firstvalue returns a scalar, so we need to broadcast it
+                    wrapped = wrap_with_date_filter(f'pl.lit({expr_text})', tgt_alias, preserve_existing)
+                    cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                    assigned_columns.add(tgt_alias)
+                    continue
+                
+                # lastvalue function handling
+                if formula.get("type") == "lastvalue":
+                    series = formula.get("series", "")
+                    series_col = sanitize_func_name(series).upper()
+                    expr_text = f'LASTVALUE(pl.col("{series_col}"))'
+                    # lastvalue returns a scalar, so we need to broadcast it
+                    wrapped = wrap_with_date_filter(f'pl.lit({expr_text})', tgt_alias, preserve_existing)
+                    cols.append(f'        {wrapped}.alias("{tgt_alias}")')
+                    assigned_columns.add(tgt_alias)
+                    continue
+                
+                # nlrx function handling
+                if formula.get("type") == "nlrx":
+                    params = formula.get("params", [])
+                    if len(params) >= 8:
+                        # Parameters: lambda, y, w1, w2, w3, w4, gss, gpr
+                        # Convert parameter names to column expressions
+                        lamb_expr = _operand_to_pl(params[0])
+                        y_expr = _operand_to_pl(params[1])
+                        w1_expr = _operand_to_pl(params[2])
+                        w2_expr = _operand_to_pl(params[3])
+                        w3_expr = _operand_to_pl(params[4])
+                        w4_expr = _operand_to_pl(params[5])
+                        gss_expr = _operand_to_pl(params[6])
+                        gpr_expr = _operand_to_pl(params[7])
+                        
+                        # If there are pending columns to add, flush them first
+                        if cols:
+                            lines.append("    pdf = pdf.with_columns([\n" + ",\n".join(cols) + "\n    ])\n")
+                            cols.clear()
+                        
+                        # NLRX returns a DataFrame, so we assign it back to pdf
+                        # The result should be stored in a column with the target name
+                        expr_text = f'NLRX(pdf, {lamb_expr}, {y_expr}, {w1_expr}, {w2_expr}, {w3_expr}, {w4_expr}, {gss_expr}, {gpr_expr})'
+                        # Since NLRX returns a DataFrame, we need to handle it differently
+                        # We'll emit a direct assignment that reassigns pdf
+                        lines.append(f"    # NLRX function call for {tgt_alias}\n")
+                        lines.append(f'    pdf = {expr_text}\n')
+                        assigned_columns.add(tgt_alias)
+                        continue
 
                 # if RHS contains special markers, render with render_polars_expr
                 if any(marker in rhs_lower for marker in ["$chain", "$mchain", "pct(", "convert(", "fishvol_rebase(", "sqrt("]):

@@ -38,3 +38,23 @@ def convert(series, date_col, as_freq, to_freq, technique, observed):
 def fishvol(series_pairs, date_col, rebase_year):
     """Mock implementation of Fisher volume index calculation."""
     return pl.lit(1.0)  # mock implementation
+
+def nlrx(df: pl.DataFrame, lamb: int | float, *, y: str = "y", w1: str = "w1", w2: str = "w2", w3: str = "w3", w4: str = "w4", gss: str = "gss", gpr: str = "gpr") -> pl.DataFrame:
+    """
+    Mock implementation of NLRX function.
+    
+    Args:
+        df: Input DataFrame
+        lamb: Lambda parameter
+        y: Y series column name
+        w1: W1 series column name
+        w2: W2 series column name
+        w3: W3 series column name
+        w4: W4 series column name
+        gss: GSS series column name
+        gpr: GPR series column name
+    
+    Returns:
+        DataFrame with nlrx result (mock - just returns input df)
+    """
+    return df  # mock implementation - just return the input DataFrame
