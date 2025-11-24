@@ -6,15 +6,16 @@ This example shows how to use the new FAME functions that have been added:
 - lastvalue(): Get the last non-null value from a series  
 - nlrx(): Call polars_econ.nlrx for non-linear relaxation calculations
 
-Based on the FAME scripting pattern:
+Based on the FAME scripting pattern with 8 parameters (lambda + 7 series):
   start = firstvalue(a)
   end = lastvalue(a)
   lambda20 = 20
   set <date start to end> b1 = 1
-  set <date start-7 to end> b1 = 0
   set <date start to end> b2 = 0
   ...
-  a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d, begsa, endmona)
+  a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d)
+
+Maps to: ple.nlrx(df, lambda20, y=a, w1=b1, w2=b2, w3=b3, w4=b4, gss=c, gpr=d)
 """
 
 from fame2pygen import generate_formulas_file, generate_test_script

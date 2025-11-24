@@ -39,7 +39,7 @@ def fishvol(series_pairs, date_col, rebase_year):
     """Mock implementation of Fisher volume index calculation."""
     return pl.lit(1.0)  # mock implementation
 
-def nlrx(df: pl.DataFrame, lamb: int | float, *, y: str = "y", w1: str="w1", w2: str="w2", w3: str="w3", w4: str="w4", gss: str="gss", gpr: str="gpr") -> pl.DataFrame:
+def nlrx(df: pl.DataFrame, lamb: int | float, *, y: str = "y", w1: str = "w1", w2: str = "w2", w3: str = "w3", w4: str = "w4", gss: str = "gss", gpr: str = "gpr") -> pl.DataFrame:
     """
     Mock implementation of NLRX function.
     
