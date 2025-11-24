@@ -148,8 +148,10 @@ Fame2PyGen supports FAME-style conditional logic with automatic translation to P
 - `eq` - equal (==)
 - `ne` - not equal (!=)
 
-**Special keyword**:
+**Special keywords (FAME null/missing values)**:
 - `nd` - null/missing value (maps to `pl.lit(None)`)
+- `na` - not available (maps to `pl.lit(None)`)
+- `nc` - not computed (maps to `pl.lit(None)`)
 
 **Examples:**
 ```python
@@ -183,6 +185,107 @@ pdf = pdf.with_columns([
 **Note on FAME date functions**: Complex FAME date functions like `dateof()`, `make()`, `date()`, `contain()`, and `end()` are currently preserved in the condition as-is and may require manual review and implementation. The conditional structure itself is fully supported.
 
 For a complete example, see [examples/conditional_expression_example.py](examples/conditional_expression_example.py).
+
+### LSUM Function Support
+
+Fame2PyGen supports the FAME `LSUM` (list sum) function for summing multiple arguments with null handling:
+
+**Syntax**: `variable = LSUM(expr1, expr2, ..., exprN)`
+
+The LSUM function:
+- Sums all provided expressions
+- Treats null values as 0 (null-safe addition)
+- Commonly used with conditional expressions for handling missing values
+
+**EXISTS Function**:
+The `EXISTS(variable)` function checks if a variable has a non-null value at each row:
+- Returns `True` where values are non-null
+- Returns `False` where values are null
+
+**Example - Complex nested IF with LSUM:**
+
+This example shows a FAME formula that conditionally sums multiple series, handling missing values:
+
+```
+AA = IF T GT DATEOF(A.FINALDATE,*,BEFORE,ENDING) 
+     THEN ND 
+     ELSE LSUM(
+         (if exists(BBA) then (if BBA EQ NA then 0 ELSE IF BBA EQ NC THEN 0 ELSE IF BBA EQ ND THEN 0 ELSE BBA) else 0),
+         (if exists(BBB) then (if BBB EQ NA then 0 ELSE BBB) else 0)
+     )
+```
+
+**Interpretation:**
+1. **Outer IF**: Checks if current time (T) is greater than a computed date from A.FINALDATE
+   - If TRUE → return ND (null)
+   - If FALSE → compute LSUM
+
+2. **LSUM arguments**: Each argument is a conditional expression that:
+   - First checks if the variable exists (has a value)
+   - If it exists, checks if the value is one of the special missing codes (NA, NC, ND) and returns 0
+   - Otherwise returns the actual value
+   - If the variable doesn't exist, returns 0
+
+3. **Python/Polars translation**:
+   - `LSUM(expr1, expr2, ...)` → `expr1.fill_null(0) + expr2.fill_null(0) + ...`
+   - `EXISTS(col)` → `col.is_not_null()`
+   - `EQ NA/NC/ND` → comparison with `pl.lit(None)` (is_null check)
+   - Nested IFs → chained `pl.when().then().otherwise()`
+
+**Generated Python code pattern:**
+```python
+# LSUM sums arguments with null → 0 handling
+def LSUM(*args) -> pl.Expr:
+    if not args:
+        return pl.lit(0)
+    result = args[0].fill_null(0)
+    for arg in args[1:]:
+        result = result + arg.fill_null(0)
+    return result
+
+# EXISTS checks for non-null values
+def EXISTS(expr: pl.Expr) -> pl.Expr:
+    return expr.is_not_null()
+
+# Usage in transformer:
+pdf = pdf.with_columns([
+    pl.when(condition)
+      .then(pl.lit(None))
+      .otherwise(
+          LSUM(
+              pl.when(EXISTS(pl.col("BBA")))
+                .then(
+                    pl.when(pl.col("BBA").is_null())
+                      .then(0)
+                      .otherwise(pl.col("BBA"))
+                )
+                .otherwise(0),
+              pl.when(EXISTS(pl.col("BBB")))
+                .then(
+                    pl.when(pl.col("BBB").is_null())
+                      .then(0)
+                      .otherwise(pl.col("BBB"))
+                )
+                .otherwise(0)
+          )
+      )
+      .alias("AA")
+])
+```
+
+**Simple LSUM example:**
+```python
+commands = [
+    "freq m",
+    "a = 10",
+    "b = 20",
+    "c = 30",
+    "total = lsum(a, b, c)"  # Result: 60
+]
+```
+
+**Note**: Complex nested conditionals inside LSUM arguments (like the example above) may require manual refinement after generation. The LSUM function itself and simple arguments are fully supported. For complex formulas, the generated code provides a good starting point that can be adjusted as needed.
+
 
 ### Usage Example
 
