@@ -1,3 +1,4 @@
+# Databricks notebook source
 """
 formulas_generator: helpers to parse FAME-like formulas and render Polars expressions.
 
@@ -6,6 +7,7 @@ Responsibilities:
  - Handling of FAME specific operators (EQ, NE, etc.) and keywords (ND, NA, T).
  - Support for complex functions like LSUM, NLRX, CHAIN, DATEOF.
  - Generation of helper wrapper definitions via generate_polars_functions.
+ - Support for scalar assignments and local database syntax (gg'var).
 """
 
 import re
@@ -21,6 +23,9 @@ FUNCTION_NAMES = {
 }
 
 LOGICAL_OPERATORS = {"or", "and", "not"}
+
+# FAME special values that represent missing/null data
+FAME_SPECIAL_VALUES = {"na", "nc", "nd"}
 
 COMPARISON_MAP = {
     ' eq ': ' == ', ' ne ': ' != ', ' gt ': ' > ', ' lt ': ' < ', ' ge ': ' >= ', ' le ': ' <= '
@@ -41,7 +46,7 @@ def sanitize_func_name(name: Optional[str]) -> str:
     s = str(name)
     # Handle local DB syntax: gg'abc -> gg_abc
     s = s.replace("'", "_").replace("$", "_")
-    # Preserve dots in column names
+    # Preserve dots in column names (Polars supports them)
     s = re.sub(r"[^A-Za-z0-9_.]", "", s)
     return s.lower()
 
@@ -79,6 +84,30 @@ def split_args_balanced(text: str) -> List[str]:
                 current_arg.append(char)
     if current_arg: args.append("".join(current_arg).strip())
     return [a for a in args if a]
+
+def convert_fame_date_to_iso(date_str: str) -> str:
+    """
+    Convert FAME date formats to ISO format (YYYY-MM-DD).
+    """
+    from datetime import datetime
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d')
+        return date_str
+    except ValueError:
+        pass
+    
+    m = re.match(r'^(\d{4})Q([1-4])$', date_str, re.IGNORECASE)
+    if m:
+        year, quarter = int(m.group(1)), int(m.group(2))
+        return f"{year}-{(quarter-1)*3+1:02d}-01"
+    
+    month_names = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
+    m = re.match(r'^(\d{1,2})([A-Za-z]{3})(\d{4})$', date_str)
+    if m:
+        day, mon, yr = int(m.group(1)), m.group(2).lower(), int(m.group(3))
+        if mon in month_names:
+            return f"{yr}-{month_names[mon]:02d}-{day:02d}"
+    return date_str
 
 def extract_if_components(text: str) -> Optional[Dict[str, str]]:
     if not re.match(r"^\s*if\b", text, re.IGNORECASE): return None
@@ -119,8 +148,8 @@ def extract_if_components(text: str) -> Optional[Dict[str, str]]:
 def parse_time_index(token: str) -> Tuple[str, int]:
     if not token: return "", 0
     t = token.strip()
-    # Allow ' in names
-    m = re.match(r"^\s*([A-Za-z0-9_$.']+)\s*(?:\[\s*t\s*([+-]?\d+)\s*\])?\s*$", t, re.IGNORECASE)
+    # Updated Regex to allow ' in names (e.g. gg'car)
+    m = re.match(r"^\s*([A-Za-z0-9_$.']+)\s*(?:\[\s*[tT]\s*([+-]?\d+)\s*\])?\s*$", t) # tT case insensitive
     if not m:
         m_dot = re.match(r"^\s*([A-Za-z0-9_$.']+)\s*$", t)
         if m_dot: return m_dot.group(1), 0
@@ -143,13 +172,12 @@ def parse_dynamic_lookup(token: str) -> Tuple[Optional[str], Optional[str]]:
     if m:
         base = m.group(1)
         idx = m.group(2)
-        # Verify it's not a standard time index
-        if idx.lower() == 't': return None, None 
+        if idx.lower() == 't': return None, None
         if re.match(r"t[+-]\d+", idx.lower()): return None, None
         return base, idx
     return None, None
 
-TOKEN_RE = re.compile(r'[A-Za-z0-9_$.']+(?:\s*\[\s*(?:t\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.']+\s*)\])?', re.IGNORECASE)
+TOKEN_RE = re.compile(r'[A-Za-z0-9_$.']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.']+\s*)\])?', re.IGNORECASE)
 
 def _is_strict_number(tok: str) -> bool:
     return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok.strip()))
@@ -160,7 +188,7 @@ def _is_numeric_literal(tok: str) -> bool:
     return len(digits) <= 3
 
 def _token_to_pl_expr(tok: str) -> str:
-    if tok.upper() in ('ND', 'NA', 'NC'): return "pl.lit(None)"
+    if tok.lower() in FAME_SPECIAL_VALUES: return "pl.lit(None)"
     # Map standalone T to DATE
     if tok.upper() == 'T': return 'pl.col("DATE")'
     if tok.startswith('"') or tok.startswith("'") and not re.match(r"[A-Za-z0-9]+'[A-Za-z0-9]+", tok): return tok
@@ -673,6 +701,24 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(df, start_date, end_date, column_pairs, offsets
     if ctx["need_div_series"]:
         defs["DIV_SERIES"] = "def DIV_SERIES(out_ser: str, *series: pl.Expr) -> pl.Expr:\n    res = series[0]\n    for s in series[1:]: res = res / s\n    return res.alias(out_ser)"
         
+    if ctx["need_point_in_time_assign"]:
+        defs["POINT_IN_TIME_ASSIGN"] = (
+            "def POINT_IN_TIME_ASSIGN(pdf: pl.DataFrame, target_col: str, date_str: str, value_expr, date_col: str = 'DATE') -> pl.DataFrame:\n"
+            "    import polars as pl\n"
+            "    from datetime import datetime, date\n"
+            "    import re\n"
+            "    try:\n"
+            "        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()\n"
+            "    except ValueError:\n"
+            "        try:\n"
+            "            target_date = datetime.strptime(date_str, '%d%b%Y').date()\n"
+            "        except ValueError:\n"
+            "            return pdf\n"
+            "    val = value_expr if isinstance(value_expr, pl.Expr) else pl.lit(value_expr)\n"
+            "    update_expr = pl.when(pl.col(date_col) == target_date).then(val).otherwise(pl.col(target_col) if target_col in pdf.columns else pl.lit(None))\n"
+            "    return pdf.with_columns(update_expr.alias(target_col))"
+        )
+    
     defs["APPLY_DATE_FILTER"] = (
         "def APPLY_DATE_FILTER(expr: pl.Expr, col_name: str, start_date: str, end_date: str, date_col: str = 'DATE', preserve_existing: bool = False) -> pl.Expr:\n"
         "    import polars as pl\n"
