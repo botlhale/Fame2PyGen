@@ -113,6 +113,33 @@ pdf = POINT_IN_TIME_ASSIGN(pdf, "ADJUSTED", "2020-01-01",
     lambda df: df.filter(pl.col("DATE") == "2019-12-31").select(pl.col("GDP")).item() * 1.05)
 ```
 
+### Enhanced Date Format Support
+
+Fame2PyGen supports multiple FAME date formats for maximum compatibility:
+
+| Format | Example | Description | Converted To |
+|--------|---------|-------------|--------------|
+| ISO | `2020-01-01` | Standard ISO format | `2020-01-01` |
+| Quarterly | `2020Q1` | Quarter notation | `2020-01-01` (first day of quarter) |
+| FAME Day-Month-Year | `12jul1985` | Day + 3-letter month + year | `1985-07-12` |
+| Annual | `2020` | Year only | `2020-01-01` (first day of year) |
+| Monthly with 'm' | `2020m03` | Year + 'm' + month | `2020-03-01` |
+| Month Name + Year | `jan2020` | 3-letter month + year | `2020-01-01` |
+| Weekly | `2020.05` | Year + week number | Approximate week start date |
+
+**Examples:**
+```python
+commands = [
+    'gdp["2020Q1"] = 1000',           # Quarterly
+    'cpi["12jul1985"] = 100',         # FAME format
+    'rate["2020"] = 0.05',            # Annual
+    'index["2020m06"] = 150',         # Monthly with 'm'
+    'sales["jan2020"] = 5000',        # Month name + year
+]
+```
+
+All date formats are automatically converted to ISO format (`YYYY-MM-DD`) for consistent internal processing with Polars.
+
 ### Frequency Support
 
 Fame2PyGen supports FAME frequency commands for defining time series periodicity:
@@ -148,6 +175,28 @@ Fame2PyGen supports FAME-style conditional logic with automatic translation to P
 - `eq` - equal (==)
 - `ne` - not equal (!=)
 
+**Logical operators**:
+- `and` - logical AND (converted to `&`)
+- `or` - logical OR (converted to `|`)
+- `not` - logical NOT (converted to `~`)
+
+**Nested conditionals (ELSE IF)**:
+Supports nested IF-ELSE chains for multiple conditions:
+```python
+# FAME syntax
+"result = if t gt 20 then a else if t gt 10 then b else if t gt 5 then c else d"
+
+# Generated Polars code (nested when/otherwise)
+pl.when(pl.col("DATE") > 20).then(pl.col("A"))
+  .otherwise(
+      pl.when(pl.col("DATE") > 10).then(pl.col("B"))
+        .otherwise(
+            pl.when(pl.col("DATE") > 5).then(pl.col("C"))
+              .otherwise(pl.col("D"))
+        )
+  )
+```
+
 **Special keywords (FAME null/missing values)**:
 - `nd` - null/missing value (maps to `pl.lit(None)`)
 - `na` - not available (maps to `pl.lit(None)`)
@@ -170,6 +219,10 @@ commands = [
     "price = 50",
     "quantity = 10", 
     "total = if price lt 100 then price * quantity else price * quantity * 1.1",
+    
+    # AND/OR conditions
+    "discount = if (price gt 50 and quantity gt 5) then 0.1 else 0",
+    "alert = if (quantity lt 5 or price gt 100) then 1 else 0",
 ]
 ```
 
