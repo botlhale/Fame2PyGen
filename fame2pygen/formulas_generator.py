@@ -139,6 +139,11 @@ def convert_fame_date_to_iso(date_str: str) -> str:
             return f"{yr}-{month_names[mon]:02d}-01"
     
     # Weekly: 2020.01 -> approximate to start of year + 7*week days
+    # Note: This is a simplified approximation. ISO week numbering is more complex:
+    # - ISO weeks start on Monday
+    # - Week 1 is the first week with a Thursday in the new year
+    # - Some weeks can belong to the previous/next year
+    # This approximation assumes week N starts on (N-1)*7 days from Jan 1.
     m = re.match(r'^(\d{4})\.(\d{1,2})$', date_str)
     if m:
         year, week = int(m.group(1)), int(m.group(2))
@@ -221,9 +226,43 @@ def parse_dynamic_lookup(token: str) -> Tuple[Optional[str], Optional[str]]:
 TOKEN_RE = re.compile(r'[A-Za-z0-9_$.\']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.\']+\s*)\])?', re.IGNORECASE)
 
 def is_strict_number(tok: str) -> bool:
+    """
+    Check if a token is a valid numeric literal (integer or float).
+    
+    Args:
+        tok: Token string to check
+        
+    Returns:
+        True if tok is a number like "123", "45.67", "-10", "+3.14", False otherwise
+        
+    Examples:
+        >>> is_strict_number("123")
+        True
+        >>> is_strict_number("abc")
+        False
+    """
     return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok.strip()))
 
 def is_numeric_literal(tok: str) -> bool:
+    """
+    Check if a token is a small numeric literal (3 digits or fewer).
+    
+    This is used to distinguish between numeric literals that should be rendered
+    inline (e.g., "100") vs. those that should use pl.lit() (e.g., "1000").
+    
+    Args:
+        tok: Token string to check
+        
+    Returns:
+        True if tok is a number with 3 or fewer digits (e.g., "1", "99", "123"),
+        False otherwise (e.g., "1000", "abc", "12.3456")
+        
+    Examples:
+        >>> is_numeric_literal("123")
+        True
+        >>> is_numeric_literal("1234")
+        False
+    """
     if not is_strict_number(tok): return False
     digits = tok.lstrip("+-").split(".", 1)[0]
     return len(digits) <= 3
