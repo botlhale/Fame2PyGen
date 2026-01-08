@@ -179,15 +179,15 @@ def parse_dynamic_lookup(token: str) -> Tuple[Optional[str], Optional[str]]:
 
 TOKEN_RE = re.compile(r'[A-Za-z0-9_$.\']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.\']+\s*)\])?', re.IGNORECASE)
 
-def _is_strict_number(tok: str) -> bool:
+def is_strict_number(tok: str) -> bool:
     return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok.strip()))
 
-def _is_numeric_literal(tok: str) -> bool:
-    if not _is_strict_number(tok): return False
+def is_numeric_literal(tok: str) -> bool:
+    if not is_strict_number(tok): return False
     digits = tok.lstrip("+-").split(".", 1)[0]
     return len(digits) <= 3
 
-def _token_to_pl_expr(tok: str) -> str:
+def token_to_pl_expr(tok: str) -> str:
     if tok.lower() in FAME_SPECIAL_VALUES: return "pl.lit(None)"
     # Map standalone T to DATE
     if tok.upper() == 'T': return 'pl.col("DATE")'
@@ -200,8 +200,8 @@ def _token_to_pl_expr(tok: str) -> str:
 
     base, offs = parse_time_index(tok)
     if base == "": return "pl.lit(None)"
-    if _is_strict_number(base):
-        if _is_numeric_literal(base): return base
+    if is_strict_number(base):
+        if is_numeric_literal(base): return base
     
     col = sanitize_func_name(base).upper()
     expr = f'pl.col("{col}")'
@@ -259,14 +259,14 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
         
         if key in FUNCTION_KEYWORDS or tok == "__ND_PLACEHOLDER__":
             parts.append(tok); last = e; continue
-        if _is_strict_number(tok) and _is_numeric_literal(tok):
+        if is_strict_number(tok) and is_numeric_literal(tok):
             parts.append(tok); last = e; continue
 
         ph = f"__PH_{idx}__"
         if substitution_map and key in substitution_map:
             placeholders[ph] = substitution_map[key]
         else:
-            placeholders[ph] = _token_to_pl_expr(tok)
+            placeholders[ph] = token_to_pl_expr(tok)
         
         parts.append(ph)
         idx += 1
@@ -485,7 +485,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     m_scalar = re.match(r"^\s*scalar\s+([A-Za-z0-9_$.']+)\s*=\s*(.+)$", s, re.IGNORECASE)
     if m_scalar:
         target, rhs = m_scalar.groups()
-        refs = [t for t in TOKEN_RE.findall(rhs) if t.lower() not in FUNCTION_KEYWORDS and not _is_strict_number(t)]
+        refs = [t for t in TOKEN_RE.findall(rhs) if t.lower() not in FUNCTION_KEYWORDS and not is_strict_number(t)]
         return {"type": "scalar", "target": target.strip(), "rhs": rhs.strip(), "refs": refs}
 
     m_freq = re.match(r"^\s*freq\s+([A-Za-z0-9]+)\s*$", s, re.IGNORECASE)
@@ -505,7 +505,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     if m_date_assign:
         target, date_str, rhs = m_date_assign.groups()
         raw = TOKEN_RE.findall(rhs)
-        refs = [t for t in raw if t.lower() != "t" and not _is_strict_number(t)]
+        refs = [t for t in raw if t.lower() != "t" and not is_strict_number(t)]
         return {"type": "point_in_time_assign", "target": target, "date": date_str, "rhs": rhs.strip(), "refs": refs}
 
     m_convert = re.match(r"^\s*([A-Za-z0-9_$.]+)\s*=\s*convert\((.+)\)\s*$", clean_s, re.IGNORECASE)
@@ -526,7 +526,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             vols = [v.strip() for v in list_args[0].split(",")]
             prices = [p.strip() for p in list_args[1].split(",")]
             pairs = list(zip(vols, prices))
-            variable_refs = [s for s in vols + prices if not _is_strict_number(s)]
+            variable_refs = [s for s in vols + prices if not is_strict_number(s)]
             return {"type": "fishvol", "target": target, "refs": variable_refs, "pairs": pairs, "year": year}
 
     if "=" in clean_s:
@@ -545,7 +545,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         if comps:
              return {"type": "conditional", "target": lhs_temp, "condition": comps["condition"], "then_expr": comps["then_expr"], "else_expr": comps["else_expr"], "refs": []}
         
-        refs = [t for t in TOKEN_RE.findall(rhs_temp) if t.lower() not in FUNCTION_KEYWORDS and not _is_strict_number(t)]
+        refs = [t for t in TOKEN_RE.findall(rhs_temp) if t.lower() not in FUNCTION_KEYWORDS and not is_strict_number(t)]
         return {"type": "simple", "target": lhs_temp, "rhs": rhs_temp, "refs": refs}
     
     return None
