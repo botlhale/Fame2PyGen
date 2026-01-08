@@ -88,25 +88,66 @@ def split_args_balanced(text: str) -> List[str]:
 def convert_fame_date_to_iso(date_str: str) -> str:
     """
     Convert FAME date formats to ISO format (YYYY-MM-DD).
+    Supported formats:
+    - ISO: YYYY-MM-DD (e.g., "2020-01-01")
+    - Quarterly: YYYYQN (e.g., "2020Q1")
+    - FAME day-month-year: DDmmmYYYY (e.g., "12jul1985", "01Feb2020")
+    - Annual: YYYY (e.g., "2020") -> first day of year
+    - Monthly with 'm': YYYYmMM (e.g., "2020m01")
+    - Monthly name-year: mmmYYYY (e.g., "jan2020")
+    - Weekly: YYYY.WW (e.g., "2020.01") -> approximate to weekly
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
+    
+    # Already ISO format
     try:
         dt = datetime.strptime(date_str, '%Y-%m-%d')
         return date_str
     except ValueError:
         pass
     
+    # Quarterly: 2020Q1 -> 2020-01-01
     m = re.match(r'^(\d{4})Q([1-4])$', date_str, re.IGNORECASE)
     if m:
         year, quarter = int(m.group(1)), int(m.group(2))
         return f"{year}-{(quarter-1)*3+1:02d}-01"
     
+    # Day-month-year: 12jul1985
     month_names = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
     m = re.match(r'^(\d{1,2})([A-Za-z]{3})(\d{4})$', date_str)
     if m:
         day, mon, yr = int(m.group(1)), m.group(2).lower(), int(m.group(3))
         if mon in month_names:
             return f"{yr}-{month_names[mon]:02d}-{day:02d}"
+    
+    # Annual: 2020 -> 2020-01-01
+    m = re.match(r'^(\d{4})$', date_str)
+    if m:
+        return f"{date_str}-01-01"
+    
+    # Monthly with 'm': 2020m01 -> 2020-01-01
+    m = re.match(r'^(\d{4})m(\d{1,2})$', date_str, re.IGNORECASE)
+    if m:
+        year, month = int(m.group(1)), int(m.group(2))
+        return f"{year}-{month:02d}-01"
+    
+    # Month name + year: jan2020 -> 2020-01-01
+    m = re.match(r'^([A-Za-z]{3})(\d{4})$', date_str, re.IGNORECASE)
+    if m:
+        mon, yr = m.group(1).lower(), int(m.group(2))
+        if mon in month_names:
+            return f"{yr}-{month_names[mon]:02d}-01"
+    
+    # Weekly: 2020.01 -> approximate to start of year + 7*week days
+    m = re.match(r'^(\d{4})\.(\d{1,2})$', date_str)
+    if m:
+        year, week = int(m.group(1)), int(m.group(2))
+        # Approximate: start of year + (week-1) * 7 days
+        start_date = datetime(year, 1, 1)
+        week_date = start_date + timedelta(days=(week-1)*7)
+        return week_date.strftime('%Y-%m-%d')
+    
+    # If no pattern matches, return as-is
     return date_str
 
 def extract_if_components(text: str) -> Optional[Dict[str, str]]:
