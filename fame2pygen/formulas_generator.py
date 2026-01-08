@@ -177,7 +177,7 @@ def parse_dynamic_lookup(token: str) -> Tuple[Optional[str], Optional[str]]:
         return base, idx
     return None, None
 
-TOKEN_RE = re.compile(r'[A-Za-z0-9_$.']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.']+\s*)\])?', re.IGNORECASE)
+TOKEN_RE = re.compile(r'[A-Za-z0-9_$.\']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.\']+\s*)\])?', re.IGNORECASE)
 
 def _is_strict_number(tok: str) -> bool:
     return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok.strip()))
