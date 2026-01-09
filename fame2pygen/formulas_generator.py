@@ -88,25 +88,71 @@ def split_args_balanced(text: str) -> List[str]:
 def convert_fame_date_to_iso(date_str: str) -> str:
     """
     Convert FAME date formats to ISO format (YYYY-MM-DD).
+    Supported formats:
+    - ISO: YYYY-MM-DD (e.g., "2020-01-01")
+    - Quarterly: YYYYQN (e.g., "2020Q1")
+    - FAME day-month-year: DDmmmYYYY (e.g., "12jul1985", "01Feb2020")
+    - Annual: YYYY (e.g., "2020") -> first day of year
+    - Monthly with 'm': YYYYmMM (e.g., "2020m01")
+    - Monthly name-year: mmmYYYY (e.g., "jan2020")
+    - Weekly: YYYY.WW (e.g., "2020.01") -> approximate to weekly
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
+    
+    # Already ISO format
     try:
         dt = datetime.strptime(date_str, '%Y-%m-%d')
         return date_str
     except ValueError:
         pass
     
+    # Quarterly: 2020Q1 -> 2020-01-01
     m = re.match(r'^(\d{4})Q([1-4])$', date_str, re.IGNORECASE)
     if m:
         year, quarter = int(m.group(1)), int(m.group(2))
         return f"{year}-{(quarter-1)*3+1:02d}-01"
     
+    # Day-month-year: 12jul1985
     month_names = {'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12}
     m = re.match(r'^(\d{1,2})([A-Za-z]{3})(\d{4})$', date_str)
     if m:
         day, mon, yr = int(m.group(1)), m.group(2).lower(), int(m.group(3))
         if mon in month_names:
             return f"{yr}-{month_names[mon]:02d}-{day:02d}"
+    
+    # Annual: 2020 -> 2020-01-01
+    m = re.match(r'^(\d{4})$', date_str)
+    if m:
+        return f"{date_str}-01-01"
+    
+    # Monthly with 'm': 2020m01 -> 2020-01-01
+    m = re.match(r'^(\d{4})m(\d{1,2})$', date_str, re.IGNORECASE)
+    if m:
+        year, month = int(m.group(1)), int(m.group(2))
+        return f"{year}-{month:02d}-01"
+    
+    # Month name + year: jan2020 -> 2020-01-01
+    m = re.match(r'^([A-Za-z]{3})(\d{4})$', date_str, re.IGNORECASE)
+    if m:
+        mon, yr = m.group(1).lower(), int(m.group(2))
+        if mon in month_names:
+            return f"{yr}-{month_names[mon]:02d}-01"
+    
+    # Weekly: 2020.01 -> approximate to start of year + 7*week days
+    # Note: This is a simplified approximation. ISO week numbering is more complex:
+    # - ISO weeks start on Monday
+    # - Week 1 is the first week with a Thursday in the new year
+    # - Some weeks can belong to the previous/next year
+    # This approximation assumes week N starts on (N-1)*7 days from Jan 1.
+    m = re.match(r'^(\d{4})\.(\d{1,2})$', date_str)
+    if m:
+        year, week = int(m.group(1)), int(m.group(2))
+        # Approximate: start of year + (week-1) * 7 days
+        start_date = datetime(year, 1, 1)
+        week_date = start_date + timedelta(days=(week-1)*7)
+        return week_date.strftime('%Y-%m-%d')
+    
+    # If no pattern matches, return as-is
     return date_str
 
 def extract_if_components(text: str) -> Optional[Dict[str, str]]:
@@ -177,17 +223,51 @@ def parse_dynamic_lookup(token: str) -> Tuple[Optional[str], Optional[str]]:
         return base, idx
     return None, None
 
-TOKEN_RE = re.compile(r'[A-Za-z0-9_$.']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.']+\s*)\])?', re.IGNORECASE)
+TOKEN_RE = re.compile(r'[A-Za-z0-9_$.\']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|["\'][^"\']+["\']|[A-Za-z0-9_$.\']+\s*)\])?', re.IGNORECASE)
 
-def _is_strict_number(tok: str) -> bool:
+def is_strict_number(tok: str) -> bool:
+    """
+    Check if a token is a valid numeric literal (integer or float).
+    
+    Args:
+        tok: Token string to check
+        
+    Returns:
+        True if tok is a number like "123", "45.67", "-10", "+3.14", False otherwise
+        
+    Examples:
+        >>> is_strict_number("123")
+        True
+        >>> is_strict_number("abc")
+        False
+    """
     return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok.strip()))
 
-def _is_numeric_literal(tok: str) -> bool:
-    if not _is_strict_number(tok): return False
+def is_numeric_literal(tok: str) -> bool:
+    """
+    Check if a token is a small numeric literal (3 digits or fewer).
+    
+    This is used to distinguish between numeric literals that should be rendered
+    inline (e.g., "100") vs. those that should use pl.lit() (e.g., "1000").
+    
+    Args:
+        tok: Token string to check
+        
+    Returns:
+        True if tok is a number with 3 or fewer digits (e.g., "1", "99", "123"),
+        False otherwise (e.g., "1000", "abc", "12.3456")
+        
+    Examples:
+        >>> is_numeric_literal("123")
+        True
+        >>> is_numeric_literal("1234")
+        False
+    """
+    if not is_strict_number(tok): return False
     digits = tok.lstrip("+-").split(".", 1)[0]
     return len(digits) <= 3
 
-def _token_to_pl_expr(tok: str) -> str:
+def token_to_pl_expr(tok: str) -> str:
     if tok.lower() in FAME_SPECIAL_VALUES: return "pl.lit(None)"
     # Map standalone T to DATE
     if tok.upper() == 'T': return 'pl.col("DATE")'
@@ -200,8 +280,8 @@ def _token_to_pl_expr(tok: str) -> str:
 
     base, offs = parse_time_index(tok)
     if base == "": return "pl.lit(None)"
-    if _is_strict_number(base):
-        if _is_numeric_literal(base): return base
+    if is_strict_number(base):
+        if is_numeric_literal(base): return base
     
     col = sanitize_func_name(base).upper()
     expr = f'pl.col("{col}")'
@@ -259,14 +339,14 @@ def _build_sub_map_and_placeholders(expr: str, substitution_map: Optional[Dict[s
         
         if key in FUNCTION_KEYWORDS or tok == "__ND_PLACEHOLDER__":
             parts.append(tok); last = e; continue
-        if _is_strict_number(tok) and _is_numeric_literal(tok):
+        if is_strict_number(tok) and is_numeric_literal(tok):
             parts.append(tok); last = e; continue
 
         ph = f"__PH_{idx}__"
         if substitution_map and key in substitution_map:
             placeholders[ph] = substitution_map[key]
         else:
-            placeholders[ph] = _token_to_pl_expr(tok)
+            placeholders[ph] = token_to_pl_expr(tok)
         
         parts.append(ph)
         idx += 1
@@ -485,7 +565,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     m_scalar = re.match(r"^\s*scalar\s+([A-Za-z0-9_$.']+)\s*=\s*(.+)$", s, re.IGNORECASE)
     if m_scalar:
         target, rhs = m_scalar.groups()
-        refs = [t for t in TOKEN_RE.findall(rhs) if t.lower() not in FUNCTION_KEYWORDS and not _is_strict_number(t)]
+        refs = [t for t in TOKEN_RE.findall(rhs) if t.lower() not in FUNCTION_KEYWORDS and not is_strict_number(t)]
         return {"type": "scalar", "target": target.strip(), "rhs": rhs.strip(), "refs": refs}
 
     m_freq = re.match(r"^\s*freq\s+([A-Za-z0-9]+)\s*$", s, re.IGNORECASE)
@@ -505,7 +585,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     if m_date_assign:
         target, date_str, rhs = m_date_assign.groups()
         raw = TOKEN_RE.findall(rhs)
-        refs = [t for t in raw if t.lower() != "t" and not _is_strict_number(t)]
+        refs = [t for t in raw if t.lower() != "t" and not is_strict_number(t)]
         return {"type": "point_in_time_assign", "target": target, "date": date_str, "rhs": rhs.strip(), "refs": refs}
 
     m_convert = re.match(r"^\s*([A-Za-z0-9_$.]+)\s*=\s*convert\((.+)\)\s*$", clean_s, re.IGNORECASE)
@@ -526,7 +606,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             vols = [v.strip() for v in list_args[0].split(",")]
             prices = [p.strip() for p in list_args[1].split(",")]
             pairs = list(zip(vols, prices))
-            variable_refs = [s for s in vols + prices if not _is_strict_number(s)]
+            variable_refs = [s for s in vols + prices if not is_strict_number(s)]
             return {"type": "fishvol", "target": target, "refs": variable_refs, "pairs": pairs, "year": year}
 
     if "=" in clean_s:
@@ -545,7 +625,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         if comps:
              return {"type": "conditional", "target": lhs_temp, "condition": comps["condition"], "then_expr": comps["then_expr"], "else_expr": comps["else_expr"], "refs": []}
         
-        refs = [t for t in TOKEN_RE.findall(rhs_temp) if t.lower() not in FUNCTION_KEYWORDS and not _is_strict_number(t)]
+        refs = [t for t in TOKEN_RE.findall(rhs_temp) if t.lower() not in FUNCTION_KEYWORDS and not is_strict_number(t)]
         return {"type": "simple", "target": lhs_temp, "rhs": rhs_temp, "refs": refs}
     
     return None

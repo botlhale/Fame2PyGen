@@ -69,7 +69,7 @@ def _collect_operands_and_ops(rhs: str) -> Tuple[List[str], List[str]]:
     return operands, ops
 
 def _operand_to_pl(tok: str) -> str:
-    return _token_to_pl_expr(tok)
+    return token_to_pl_expr(tok)
 
 def generate_formulas_file(cmds: List[str], out_filename: str = "formulas.py"):
     # Create a context to track needed functions (repo logic)
@@ -261,7 +261,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     # We assume if it's a string not in quotes, it might be a variable from 'scalar' assignment
                     val_lambda = lamb_val 
                     # If it's a column, we need extraction, but usually lambda is scalar in NLRX context
-                    if not _is_numeric_literal(lamb_val) and not lamb_val.replace('.','',1).isdigit():
+                    if not is_numeric_literal(lamb_val) and not lamb_val.replace('.','',1).isdigit():
                          # It is a variable name. If it was defined as a scalar earlier (python var), use directly.
                          # If it is a column, we might need extraction. 
                          # For safety in this hybrid, assume it matches a python var if defined, or we extract.
@@ -340,7 +340,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     # Arithmetic optimizations
                     ops = _collect_operands_and_ops(rhs_text)[1]
                     if ops and all(o == "+" for o in ops):
-                        args = [f'pl.col("{sanitize_func_name(x).upper()}")' if not _is_numeric_literal(x) else f'pl.lit({x})' for x in _collect_operands_and_ops(rhs_text)[0]]
+                        args = [f'pl.col("{sanitize_func_name(x).upper()}")' if not is_numeric_literal(x) else f'pl.lit({x})' for x in _collect_operands_and_ops(rhs_text)[0]]
                         raw_expr = f'ADD_SERIES("{tgt_alias}", {", ".join(args)})'
                         # ADD_SERIES handles alias internally, so we just wrap filter
                         if group_filter:
@@ -379,7 +379,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             iso_date = convert_fame_date_to_iso(date_str)
             
             # Value expression
-            if _is_strict_number(rhs):
+            if is_strict_number(rhs):
                 val_expr = f"pl.lit({rhs})"
             else:
                 val_expr = render_polars_expr(rhs) # Simple render for RHS
