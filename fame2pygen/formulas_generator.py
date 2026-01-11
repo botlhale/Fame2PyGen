@@ -101,6 +101,10 @@ def split_args_balanced(text: str) -> List[str]:
     return [a for a in args if a]
 
 
+def _split_lsum_args(text: str) -> List[str]:
+    return split_args_balanced(text)
+
+
 def convert_fame_date_to_iso(date_str:  str) -> str:
     """
     Convert FAME date formats to ISO format (YYYY-MM-DD).
@@ -281,14 +285,14 @@ def parse_dynamic_lookup(token: str) -> Tuple[Optional[str], Optional[str]]:
 
 # Token regex for variable names with optional time/date indices
 TOKEN_RE = re.compile(
-    r"[A-Za-z0-9_$.']+(? :\s*\[\s*(? :[tT]\s*[+-]?\d+|[\"'][^\"']+[\"']|[A-Za-z0-9_$.']+\s*)\])?",
+    r"[A-Za-z0-9_$.']+(?:\s*\[\s*(?:[tT]\s*[+-]?\d+|[\"'][^\"']+[\"']|[A-Za-z0-9_$.']+\s*)\])?",
     re. IGNORECASE
 )
 
 
 def is_strict_number(tok: str) -> bool:
     """Check if a token is a valid numeric literal (integer or float)."""
-    return bool(re.fullmatch(r"[+-]?\d+(? :\.\d+)?", tok. strip()))
+    return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", tok. strip()))
 
 
 def is_numeric_literal(tok: str) -> bool:
@@ -338,6 +342,11 @@ def token_to_pl_expr(tok: str) -> str:
         expr = f"{expr}. shift({-offs})"
 
     return expr
+
+
+# Backwards-compatible helpers used in tests
+def _token_to_pl_expr(tok: str) -> str:
+    return token_to_pl_expr(tok)
 
 
 def _render_chain_calls(expr: str, date_col_name: str = "DATE") -> str:
@@ -868,7 +877,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
 def _parse_chain_top_level(line: str) -> Optional[Dict]:
     """Parse $chain or $mchain at the top level of an assignment."""
     # Match $mchain or $chain pattern
-    m = re.match(r'^\s*(? :set\s+)?([A-Za-z0-9_$. ]+)\s*=\s*\$(mchain|chain)\s*\(\s*"(.*?)"\s*,\s*"\s*(\d{4})\s*"\s*\)\s*$', line, re.IGNORECASE)
+    m = re.match(r'^\s*(?:set\s+)?([A-Za-z0-9_$. ]+)\s*=\s*\$(mchain|chain)\s*\(\s*"(.*?)"\s*,\s*"\s*(\d{4})\s*"\s*\)\s*$', line, re.IGNORECASE)
     if m:
         target, chain_type, inner, year = m.groups()
         # Parse the terms from inner expression
@@ -1193,13 +1202,40 @@ def SHIFT_PCT_BACKWARDS_MULTIPLE(df, start_date, end_date, column_pairs, offsets
     # Always include APPLY_DATE_FILTER
     defs["APPLY_DATE_FILTER"] = '''def APPLY_DATE_FILTER(expr: pl.Expr, col_name: str, start_date: str, end_date: str, date_col: str = 'DATE', preserve_existing: bool = False) -> pl.Expr:
     """Apply an expression only within a date range."""
-    from datetime import datetime
+    from datetime import datetime, date
+    import re
 
     def parse_date(d_str):
         if d_str == '*':
             return None
-        try: 
-            return datetime.strptime(d_str, '%Y-%m-%d').date()
-        except ValueError:
-            pass
-        try: 
+        for fmt in ('%Y-%m-%d', '%d%b%Y'):
+            try:
+                return datetime.strptime(d_str, fmt).date()
+            except ValueError:
+                continue
+        m = re.match(r'^(\d{4})Q([1-4])$', d_str, re.IGNORECASE)
+        if m:
+            y, q = int(m.group(1)), int(m.group(2))
+            return date(y, (q - 1) * 3 + 1, 1)
+        return None
+
+    s = parse_date(start_date)
+    if end_date == '*':
+        e = None
+    else:
+        e = parse_date(end_date)
+
+    date_expr = pl.col(date_col)
+    if s and e:
+        cond = (date_expr >= pl.lit(s)) & (date_expr <= pl.lit(e))
+    elif s:
+        cond = date_expr >= pl.lit(s)
+    elif e:
+        cond = date_expr <= pl.lit(e)
+    else:
+        cond = pl.lit(True)
+
+    otherwise_expr = pl.col(col_name) if preserve_existing else pl.lit(None)
+    return pl.when(cond).then(expr).otherwise(otherwise_expr).alias(col_name)'''
+
+    return defs

@@ -1,0 +1,129 @@
+# Master compilation of FAME script scenarios covered in repository history/tests
+
+# --- Frequency declarations ---
+freq m
+freq b
+freq bus
+
+# --- Date range subsetting and preserve_existing flow ---
+v_base = 100
+date 2020-01-01 to 2020-12-31
+v_2020 = v_base * 2
+date 2021-01-01 to 2021-12-31
+v_2021 = v_base * 3
+date *
+v_all = v_base + v_2020 + v_2021
+
+# ddMMMYYYY start date and open-ended end date
+date 01Feb2020 to 31Dec2020
+a = 100
+date 01Jan2021 to *
+b = 200
+date *
+
+# --- Core arithmetic and shift/PCT patterns ---
+vbot = 1
+v1 = v2 + v3 - v4
+v1 = v2[t+1]
+set v123s[t] = v123s[t+1]/(1+(pct(v1014s[t+1])/100))
+set v21 = pct(v22[t+1])
+set v23 = convert(v24, 'Q', 'M', 'AVG', 'END')
+set v25 = fishvol_rebase({v26},{p26},2020)
+v27 = {a, b, c}
+set abcd = $chain("a - b - c - d", "2020")
+v_daily = convert(v_monthly, 'm', 'b', 'linear', 'end')
+b = convert(temp, bus, dis, ave)
+
+# --- Point-in-time assignments (ISO, ddMMMYYYY, quarterly) ---
+gdp["2020-01-01"] = 1000
+gdp["2020-01-01"] = 100
+gdp["2020-01-01"] = gdp["2019-12-31"] * 1.05
+gdp["2020-02-01"] = gdp["2020-01-01"] * 1.01
+cpi["2020Q1"] = 105.5
+set a[12mar2020]=33
+v1["2020-01-01"] = v2 + 10
+cpi['2020Q1'] = 105.5
+
+# --- Conditional logic scenarios (nd/na/nc, nested, AND/OR, date functions) ---
+result = if t gt 100 then a else nd
+result = if t gt 100 then a else na
+result = if t gt 100 then a else nc
+result = if t ge 100 then a else b
+result = if a ge 100 then a+b else c
+result = if a ge 100 then b else c
+abc = if t ge 5 then a+b else nd
+abc = if t gt 10 then a else if t ge 5 then b else c
+nested = if t gt 10 then base else if t ge 5 then base * 2 else base * 3
+result = if (t gt 5 and t lt 10) then a else b
+result = if (t lt 5 or t gt 10) then a else b
+result = if (t gt 5 and t lt 10) or (t gt 20 and t lt 30) then a else b
+result = if t ge dateof(make (date(bus), "10aug2020"), *, contain, end) then a+b else nd
+abc = if t ge dateof(make(date(bus), "3dec1991"),*,contain,end) then a+b+ce+d else nd
+check = if a eq na then 0 else a
+check = if a eq nc then 0 else a
+check = if exists(a) then a else 0
+result = if v1 gt 100 then v2 * 2 else v2
+result1 = if v1 gt 50 then v2 else nd
+result2 = if v1 lt 150 then v2 * 2 else v2
+x = if v1 gt 100 then v2 * 2 else v3
+adjusted = if year gt 2020 then price * 1.05 else price
+cond_result = if t ge 5 then result.a * 2 else nd
+y = if a eq b then c else d
+y = if a ne b then c else d
+y = if a gt b then c else d
+y = if a ge b then c else d
+y = if a lt b then c else d
+y = if a le b then c else d
+
+# --- Arithmetic helper coverage ---
+result = a + b + c
+result = a - b - c
+result = a / b / c
+result = a * b * c
+add_result = a + b + c
+sub_result = a - b
+mul_result = a * b
+div_result = a / b
+total = lsum(a, b, c)
+total = lsum((if a gt 0 then a else 0), (if b gt 0 then b else 0))
+result = sqrt(a)
+result = sqrt(a*b)
+result = sqrt(a*b) or sqrt(c)
+
+# --- Dot-notation targets and refs ---
+d.a = 100
+result = d.a + b.c
+result.a = d.a + b.c
+
+# --- Date-filtered assignment examples for APPLY_DATE_FILTER ---
+date 2020-01-01 to 2020-12-31
+v_filtered = v_base * 2
+date *
+
+# --- Firstvalue/Lastvalue/NLRX and inline date assignment patterns ---
+start = firstvalue(a)
+start = firstvalue(series_a)
+mystart = firstvalue(series_123)
+end = lastvalue(a)
+myend = lastvalue(series_456)
+lambda20 = 20
+set <date 2020-01-01 to 2020-12-31> b1 = 1
+set <date 2019-12-25 to 2020-12-31> b1 = 0
+set <date 2020-01-01 to 2020-12-31> b2 = 0
+set <date 2020-01-01 to 2020-12-31> b3 = 0
+set <date 2020-01-01 to 2020-12-31> b4 = 0
+set <date 2020-01-01 to 2020-12-31> c = 0
+set <date 2020-01-01 to 2020-12-31> d = 0
+a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d)
+a_t = nlrx(20, a, b1, b2, b3, b4, c, d)
+a_t = nlrx(lambda20, a, b1, b2, b3, b4, c, d, extra1, extra2)
+a_t = NLRX(l, a, b1, b2, b3, b4, c, d)
+a_t = NlRx(l, a, b1, b2, b3, b4, c, d)
+result = nlrx(20, y_var, w1_var, w2_var, w3_var, w4_var, gss_var, gpr_var)
+result = nlrx(lambda20, y, w1, w2, w3, w4, gss, gpr)
+
+# --- Business-day frequency convert scenario ---
+freq b
+v_daily = convert(v_monthly, 'm', 'b', 'linear', 'end')
+freq m
+
