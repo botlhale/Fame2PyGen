@@ -322,5 +322,41 @@ def test_comprehensive_example():
             os.unlink(formulas_file)
 
 
+def test_local_database_dataframe_creation():
+    """Local DB syntax should produce dedicated DataFrame selection."""
+    cmds = ["freq m", "aa'abc = 5"]
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        ts_file = f.name
+    try:
+        generate_test_script(cmds, ts_file)
+        with open(ts_file, 'r') as f:
+            content = f.read()
+        assert 'AA_ABC' in content
+        assert 'pl.col("AA_ABC").alias("ABC")' in content
+        assert 'AA = pdf.select' in content
+        assert 'local_databases["AA"]' in content
+    finally:
+        if os.path.exists(ts_file):
+            os.unlink(ts_file)
+
+
+def test_local_database_ignore_work_fame():
+    """work' and fame' prefixes should be ignored as local DB markers."""
+    cmds = ["work'abc = 1", "fame'def = 2"]
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        ts_file = f.name
+    try:
+        generate_test_script(cmds, ts_file)
+        with open(ts_file, 'r') as f:
+            content = f.read()
+        assert 'WORK_ABC' not in content
+        assert 'FAME_DEF' not in content
+        assert 'local_databases["WORK"]' not in content
+        assert 'local_databases["FAME"]' not in content
+    finally:
+        if os.path.exists(ts_file):
+            os.unlink(ts_file)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

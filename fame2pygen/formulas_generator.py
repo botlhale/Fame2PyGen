@@ -39,6 +39,34 @@ KEYWORDS_TO_SKIP = {
 
 FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS | KEYWORDS_TO_SKIP
 
+# Local database prefixes to ignore (treated as main database)
+LOCAL_DB_IGNORE = {"work", "fame"}
+
+
+def split_local_db_name(name: Optional[str]) -> Tuple[Optional[str], str]:
+    """
+    Split a FAME local database reference of the form DB'SERIES.
+
+    Returns:
+        (db_prefix, series_name) where db_prefix is None when there is no
+        local database specified or when the prefix should be ignored.
+    """
+    if name is None:
+        return None, ""
+
+    text = str(name).strip()
+    m = re.match(r"^([A-Za-z0-9]+)\s*'\s*(.+)$", text)
+    if not m:
+        return None, text
+
+    db_prefix = m.group(1)
+    series_name = m.group(2)
+
+    if db_prefix.lower() in LOCAL_DB_IGNORE:
+        return None, series_name
+
+    return db_prefix, series_name
+
 # ---------- Utilities ----------
 
 def sanitize_func_name(name:  Optional[str]) -> str:
@@ -328,15 +356,21 @@ def token_to_pl_expr(tok: str) -> str:
 
     # Parse time index
     base, offs = parse_time_index(tok_stripped)
-    if base == "": 
+    if base == "":
         return "pl.lit(None)"
 
+    db_prefix, series_name = split_local_db_name(base)
+    if db_prefix:
+        base_for_col = f"{db_prefix}_{series_name}"
+    else:
+        base_for_col = series_name
+
     # Numeric literal - always wrap in pl.lit()
-    if is_strict_number(base):
-        return f"pl.lit({base})"
+    if is_strict_number(base_for_col):
+        return f"pl.lit({base_for_col})"
 
     # Column reference
-    col = sanitize_func_name(base).upper()
+    col = sanitize_func_name(base_for_col).upper()
     expr = f'pl.col("{col}")'
     if offs != 0:
         expr = f"{expr}. shift({-offs})"
@@ -698,8 +732,10 @@ def _extract_refs_from_expr(expr: str) -> List[str]:
             continue
         # Extract base name (without time index)
         base, _ = parse_time_index(t)
-        if base and not is_strict_number(base):
-            refs.append(base)
+        db_prefix, series_name = split_local_db_name(base)
+        ref_name = f"{db_prefix}'{series_name}" if db_prefix else series_name
+        if ref_name and not is_strict_number(ref_name):
+            refs.append(ref_name)
 
     return refs
 
