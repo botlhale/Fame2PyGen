@@ -12,7 +12,8 @@ try:
         parse_fame_formula, generate_polars_functions, sanitize_func_name,
         render_polars_expr, render_conditional_expr, is_numeric_literal,
         is_strict_number, token_to_pl_expr, parse_time_index,
-        convert_fame_date_to_iso, normalize_formula_text, split_args_balanced
+        convert_fame_date_to_iso, normalize_formula_text, split_args_balanced,
+        split_local_db_name, LOCAL_DB_IGNORE
     )
 except ImportError:
     # Fallback for direct execution
@@ -20,7 +21,8 @@ except ImportError:
         parse_fame_formula, generate_polars_functions, sanitize_func_name,
         render_polars_expr, render_conditional_expr, is_numeric_literal,
         is_strict_number, token_to_pl_expr, parse_time_index,
-        convert_fame_date_to_iso, normalize_formula_text, split_args_balanced
+        convert_fame_date_to_iso, normalize_formula_text, split_args_balanced,
+        split_local_db_name, LOCAL_DB_IGNORE
     )
 
 # Regex for splitting arithmetic expressions
@@ -152,6 +154,17 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     current_date_filter = _NO_DATE_FILTER_SET
     current_freq = None
     parsed = []
+
+    def target_alias(name: str) -> str:
+        db_prefix, series_name = split_local_db_name(name)
+        col_name = f"{db_prefix}_{series_name}" if db_prefix else series_name
+        return sanitize_func_name(col_name).upper()
+
+    def series_alias_only(name: str) -> str:
+        _, series_name = split_local_db_name(name)
+        return sanitize_func_name(series_name).upper()
+
+    local_db_series = defaultdict(set)
     
     for idx, p in enumerate(parsed_raw):
         np = p.copy()
@@ -180,6 +193,17 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
         # Track frequency
         np["freq"] = current_freq
         np["original_order"] = idx
+
+        if "target" in np:
+            db_prefix, _ = split_local_db_name(np["target"])
+            if db_prefix:
+                local_db_series[db_prefix.upper()].add(series_alias_only(np["target"]))
+
+        for ref in np.get("refs", []):
+            db_prefix, _ = split_local_db_name(ref)
+            if db_prefix:
+                local_db_series[db_prefix.upper()].add(series_alias_only(ref))
+
         parsed.append(np)
 
     # Build formulas dictionary with unique keys
@@ -244,17 +268,18 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
     
     assigned_columns = set()
     processed_keys = set()
+    lines.append("    local_databases = {}\n")
 
     # 1. Handle batch SHIFT_PCT_BACKWARDS first
     if shift_pct_backwards_patterns: 
-        column_pairs = [(tgt. upper(), pct.upper()) for tgt, ser1, pct, _ in shift_pct_backwards_patterns]
+        column_pairs = [(tgt.upper(), pct.upper()) for tgt, ser1, pct, _ in shift_pct_backwards_patterns]
         offsets = [offs for _, _, _, offs in shift_pct_backwards_patterns]
         lines.append("\n    # Batch SHIFT_PCT_BACKWARDS processing\n")
         lines.append(f'    pdf = SHIFT_PCT_BACKWARDS_MULTIPLE(pdf, "2016-12-31", "1981-03-31", {column_pairs}, offsets={offsets})\n')
         
         # Mark these as assigned
         for tgt, _, _, _ in shift_pct_backwards_patterns: 
-            assigned_columns.add(tgt. upper())
+            assigned_columns.add(tgt.upper())
 
     # 2. Process computation levels
     for level_idx, level in enumerate(levels):
@@ -330,7 +355,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             if ftype == "scalar": 
                 tgt_key = group_targets[0]
                 formula = formulas[tgt_key]
-                tgt_alias = sanitize_func_name(formula["target"]).upper()
+                tgt_alias = target_alias(formula["target"])
                 rhs = formula.get("rhs", "")
                 
                 lines.append(f"\n    # Scalar assignment: {tgt_alias}\n")
@@ -340,11 +365,11 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     m = re.match(r"__LOOKUP__: ([A-Za-z0-9_]+):([A-Za-z0-9_]+)", rendered)
                     if m:
                         ser, idx = m.groups()
-                        lines. append(f'    {tgt_alias} = pdf.filter(pl.col("DATE") == {idx. upper()}).select(pl.col("{ser. upper()}")).item()\n')
+                        lines.append(f'    {tgt_alias} = pdf.filter(pl.col("DATE") == {idx.upper()}).select(pl.col("{ser.upper()}")).item()\n')
                     else:
                         lines.append(f'    {tgt_alias} = {rendered}\n')
                 elif any(agg in rendered for agg in [". mean()", ".last()", ".first()", ".sum()", ".min()", ".max()"]):
-                    lines.append(f'    {tgt_alias} = pdf. select({rendered}).item()\n')
+                    lines.append(f'    {tgt_alias} = pdf.select({rendered}).item()\n')
                 else: 
                     lines.append(f'    {tgt_alias} = {rendered}\n')
                 continue
@@ -353,10 +378,10 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             if ftype == "nlrx":
                 tgt_key = group_targets[0]
                 formula = formulas[tgt_key]
-                tgt_alias = sanitize_func_name(formula["target"]).upper()
+                tgt_alias = target_alias(formula["target"])
                 args = formula.get("args", [])
                 
-                lines. append(f"\n    # NLRX computation: {tgt_alias}\n")
+                lines.append(f"\n    # NLRX computation: {tgt_alias}\n")
                 
                 if len(args) >= 8:
                     lamb_val = args[0]
@@ -372,18 +397,18 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             # --- HANDLE COLUMN OPERATIONS ---
             # Add comment for date filter if present
             if group_filter is not None and group_filter is not _NO_DATE_FILTER_SET:
-                lines. append(f"\n    # Date filter:  {group_filter['start']} to {group_filter['end']}\n")
+                lines.append(f"\n    # Date filter:  {group_filter['start']} to {group_filter['end']}\n")
             elif group_filter is None and len(group_targets) > 0:
-                lines. append(f"\n    # Date filter: * (all dates)\n")
+                lines.append(f"\n    # Date filter: * (all dates)\n")
             
-            target_names = [formulas[t]['target']. upper() for t in group_targets]
+            target_names = [target_alias(formulas[t]['target']) for t in group_targets]
             lines.append(f"    # Level {level_idx + 1}: compute {', '.join(target_names)}\n")
             
             cols_code = []
             
             for tgt_key in group_targets: 
                 formula = formulas[tgt_key]
-                tgt_alias = sanitize_func_name(formula["target"]).upper()
+                tgt_alias = target_alias(formula["target"])
                 preserve_existing = tgt_alias in assigned_columns
                 
                 # Check if this is a backwards shift_pct (already handled)
@@ -496,7 +521,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 if len(cols_code) == 1:
                     lines.append(f'    pdf = pdf.with_columns([{cols_code[0]}])\n')
                 else: 
-                    lines. append('    pdf = pdf. with_columns([\n')
+                    lines.append('    pdf = pdf.with_columns([\n')
                     for i, code in enumerate(cols_code):
                         comma = ',' if i < len(cols_code) - 1 else ''
                         lines.append(f'        {code}{comma}\n')
@@ -511,8 +536,8 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 continue
             
             # Sort by original order
-            assignments. sort(key=lambda x: x. get("original_order", 0))
-            tgt_alias = sanitize_func_name(target).upper()
+            assignments.sort(key=lambda x: x.get("original_order", 0))
+            tgt_alias = target_alias(target)
             
             lines.append(f"    # Point-in-time for {tgt_alias}\n")
             
@@ -546,10 +571,28 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             
             # Write the expression
             expr_str = ''.join(chain_parts)
-            lines.append(f'    pdf = pdf. with_columns([{expr_str}])\n')
+            lines.append(f'    pdf = pdf.with_columns([{expr_str}])\n')
             assigned_columns.add(tgt_alias)
 
-    # 4. Return the transformed DataFrame
+    # 4. Build local database DataFrames (e.g., AA'ABC -> DataFrame AA with column ABC)
+    if local_db_series:
+        lines.append("\n    # Local databases extracted from pdf\n")
+        for db_name, series_set in sorted(local_db_series.items()):
+            db_var = sanitize_func_name(db_name).upper()
+            lines.append(f"    {db_var}_cols = []\n")
+            lines.append(f'    if "DATE" in pdf.columns:\n')
+            lines.append(f"        {db_var}_cols.append(pl.col(\"DATE\"))\n")
+            for series in sorted(series_set):
+                col_name = f"{db_name.upper()}_{series}"
+                lines.append(f'    if "{col_name}" in pdf.columns:\n')
+                lines.append(f'        {db_var}_cols.append(pl.col("{col_name}").alias("{series}"))\n')
+            lines.append(f"    if {db_var}_cols:\n")
+            lines.append(f"        {db_var} = pdf.select({db_var}_cols)\n")
+            lines.append(f'        local_databases[\"{db_name.upper()}\"] = {db_var}\n')
+
+    # 5. Return the transformed DataFrame (with local databases attached)
+    # Keep return type stable while exposing local databases for callers that need them.
+    lines.append("    setattr(pdf, \"_local_databases\", local_databases)\n")
     lines.append("\n    return pdf\n")
 
     # Write the file
