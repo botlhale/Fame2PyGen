@@ -365,11 +365,11 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     m = re.match(r"__LOOKUP__: ([A-Za-z0-9_]+):([A-Za-z0-9_]+)", rendered)
                     if m:
                         ser, idx = m.groups()
-                        lines. append(f'    {tgt_alias} = pdf.filter(pl.col("DATE") == {idx. upper()}).select(pl.col("{ser. upper()}")).item()\n')
+                        lines.append(f'    {tgt_alias} = pdf.filter(pl.col("DATE") == {idx. upper()}).select(pl.col("{ser. upper()}")).item()\n')
                     else:
                         lines.append(f'    {tgt_alias} = {rendered}\n')
                 elif any(agg in rendered for agg in [". mean()", ".last()", ".first()", ".sum()", ".min()", ".max()"]):
-                    lines.append(f'    {tgt_alias} = pdf. select({rendered}).item()\n')
+                    lines.append(f'    {tgt_alias} = pdf.select({rendered}).item()\n')
                 else: 
                     lines.append(f'    {tgt_alias} = {rendered}\n')
                 continue
@@ -381,7 +381,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 tgt_alias = target_alias(formula["target"])
                 args = formula.get("args", [])
                 
-                lines. append(f"\n    # NLRX computation: {tgt_alias}\n")
+                lines.append(f"\n    # NLRX computation: {tgt_alias}\n")
                 
                 if len(args) >= 8:
                     lamb_val = args[0]
@@ -397,9 +397,9 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             # --- HANDLE COLUMN OPERATIONS ---
             # Add comment for date filter if present
             if group_filter is not None and group_filter is not _NO_DATE_FILTER_SET:
-                lines. append(f"\n    # Date filter:  {group_filter['start']} to {group_filter['end']}\n")
+                lines.append(f"\n    # Date filter:  {group_filter['start']} to {group_filter['end']}\n")
             elif group_filter is None and len(group_targets) > 0:
-                lines. append(f"\n    # Date filter: * (all dates)\n")
+                lines.append(f"\n    # Date filter: * (all dates)\n")
             
             target_names = [target_alias(formulas[t]['target']) for t in group_targets]
             lines.append(f"    # Level {level_idx + 1}: compute {', '.join(target_names)}\n")
@@ -521,7 +521,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 if len(cols_code) == 1:
                     lines.append(f'    pdf = pdf.with_columns([{cols_code[0]}])\n')
                 else: 
-                    lines. append('    pdf = pdf. with_columns([\n')
+                    lines.append('    pdf = pdf.with_columns([\n')
                     for i, code in enumerate(cols_code):
                         comma = ',' if i < len(cols_code) - 1 else ''
                         lines.append(f'        {code}{comma}\n')
@@ -536,7 +536,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 continue
             
             # Sort by original order
-            assignments. sort(key=lambda x: x. get("original_order", 0))
+            assignments.sort(key=lambda x: x.get("original_order", 0))
             tgt_alias = target_alias(target)
             
             lines.append(f"    # Point-in-time for {tgt_alias}\n")
@@ -571,7 +571,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             
             # Write the expression
             expr_str = ''.join(chain_parts)
-            lines.append(f'    pdf = pdf. with_columns([{expr_str}])\n')
+            lines.append(f'    pdf = pdf.with_columns([{expr_str}])\n')
             assigned_columns.add(tgt_alias)
 
     # 4. Build local database DataFrames (e.g., AA'ABC -> DataFrame AA with column ABC)
