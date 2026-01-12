@@ -46,6 +46,7 @@ LOCAL_DB_IGNORE = {"work", "fame"}
 def split_local_db_name(name: Optional[str]) -> Tuple[Optional[str], str]:
     """
     Split a FAME local database reference of the form DB'SERIES.
+    Series names may include letters, numbers, underscores, dollar signs, or dots.
 
     Returns:
         (db_prefix, series_name) where db_prefix is None when there is no

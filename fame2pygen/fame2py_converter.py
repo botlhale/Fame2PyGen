@@ -591,6 +591,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             lines.append(f'        local_databases[\"{db_name.upper()}\"] = {db_var}\n')
 
     # 5. Return the transformed DataFrame (with local databases attached)
+    # Keep return type stable while exposing local databases for callers that need them.
     lines.append("    setattr(pdf, \"_local_databases\", local_databases)\n")
     lines.append("\n    return pdf\n")
 
