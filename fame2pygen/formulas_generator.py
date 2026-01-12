@@ -337,11 +337,11 @@ def token_to_pl_expr(tok: str) -> str:
     tok_lower = tok_stripped.lower()
 
     # FAME special values -> null
-    if tok_lower in FAME_SPECIAL_VALUES: 
+    if tok_lower in FAME_SPECIAL_VALUES:
         return "pl.lit(None)"
 
     # Standalone T -> DATE column
-    if tok_stripped. upper() == 'T':
+    if tok_stripped.upper() == 'T':
         return 'pl.col("DATE")'
 
     # Quoted strings
@@ -366,8 +366,8 @@ def token_to_pl_expr(tok: str) -> str:
         base_for_col = series_name
 
     # Numeric literal - always wrap in pl.lit()
-    if is_strict_number(base_for_col):
-        return f"pl.lit({base_for_col})"
+    if is_strict_number(base):
+        return f"pl.lit({base})"
 
     # Column reference
     col = sanitize_func_name(base_for_col).upper()
