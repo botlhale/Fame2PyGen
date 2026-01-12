@@ -272,14 +272,14 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
 
     # 1. Handle batch SHIFT_PCT_BACKWARDS first
     if shift_pct_backwards_patterns: 
-        column_pairs = [(tgt. upper(), pct.upper()) for tgt, ser1, pct, _ in shift_pct_backwards_patterns]
+        column_pairs = [(tgt.upper(), pct.upper()) for tgt, ser1, pct, _ in shift_pct_backwards_patterns]
         offsets = [offs for _, _, _, offs in shift_pct_backwards_patterns]
         lines.append("\n    # Batch SHIFT_PCT_BACKWARDS processing\n")
         lines.append(f'    pdf = SHIFT_PCT_BACKWARDS_MULTIPLE(pdf, "2016-12-31", "1981-03-31", {column_pairs}, offsets={offsets})\n')
         
         # Mark these as assigned
         for tgt, _, _, _ in shift_pct_backwards_patterns: 
-            assigned_columns.add(tgt. upper())
+            assigned_columns.add(tgt.upper())
 
     # 2. Process computation levels
     for level_idx, level in enumerate(levels):
@@ -365,7 +365,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     m = re.match(r"__LOOKUP__: ([A-Za-z0-9_]+):([A-Za-z0-9_]+)", rendered)
                     if m:
                         ser, idx = m.groups()
-                        lines.append(f'    {tgt_alias} = pdf.filter(pl.col("DATE") == {idx. upper()}).select(pl.col("{ser. upper()}")).item()\n')
+                        lines.append(f'    {tgt_alias} = pdf.filter(pl.col("DATE") == {idx.upper()}).select(pl.col("{ser.upper()}")).item()\n')
                     else:
                         lines.append(f'    {tgt_alias} = {rendered}\n')
                 elif any(agg in rendered for agg in [". mean()", ".last()", ".first()", ".sum()", ".min()", ".max()"]):

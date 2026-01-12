@@ -55,7 +55,7 @@ def split_local_db_name(name: Optional[str]) -> Tuple[Optional[str], str]:
         return None, ""
 
     text = str(name).strip()
-    m = re.match(r"^([A-Za-z0-9]+)\s*'\s*(.+)$", text)
+    m = re.match(r"^([A-Za-z0-9]+)\s*'\s*([A-Za-z0-9_$.]+)$", text)
     if not m:
         return None, text
 
