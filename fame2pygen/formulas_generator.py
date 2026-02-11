@@ -628,12 +628,18 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
         return "". join(out_parts)
 
     def dateof_templ(inner):
-        args = [a.strip() for a in split_args_balanced(inner) if a.strip()]
+        raw_args = split_args_balanced(inner)
+        args = []
+        for a in raw_args:
+            cleaned = a.strip()
+            if cleaned:
+                args.append(cleaned)
         if ctx is not None:
             ctx["has_dateof_generic"] = True
         # When suffix-style arguments are present, continue tracking variants
+        # DATEOF variants are only defined for suffix-based usage (e.g., contain/end)
         if len(args) >= 3:
-            suffix1 = re.sub(r'[^A-Z0-9]', '', args[-2]. upper())
+            suffix1 = re.sub(r'[^A-Z0-9]', '', args[-2].upper())
             suffix2 = re.sub(r'[^A-Z0-9]', '', args[-1].upper())
             if ctx is not None:
                 if "dateof_variants" not in ctx:
