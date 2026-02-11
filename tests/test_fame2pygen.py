@@ -134,7 +134,7 @@ def test_business_day_frequency_with_convert():
     
     cmds = [
         "freq b",  # Business day frequency
-        "v_daily = convert(v_monthly, 'm', 'b', 'linear', 'end')"
+        "v_daily = convert(v_monthly, b, linear, end)"
     ]
     
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
@@ -147,20 +147,18 @@ def test_business_day_frequency_with_convert():
         generate_formulas_file(cmds, formulas_file)
         generate_test_script(cmds, ts_file)
         
-        # Read generated formulas
-        with open(formulas_file, 'r') as f:
-            formulas_content = f.read()
-        
-        # Verify CONVERT function is generated
-        assert "def CONVERT" in formulas_content
-        assert "polars_econ" in formulas_content
-        
         # Read generated transformer
         with open(ts_file, 'r') as f:
             ts_content = f.read()
         
-        # Verify the transformation includes convert call
-        assert "v_daily" in ts_content or "V_DAILY" in ts_content
+        # Verify polars_econ is imported for convert
+        assert "polars_econ" in ts_content
+        # Verify ple.convert call is generated
+        assert "ple.convert" in ts_content
+        # Verify the source column is in the convert group
+        assert "V_MONTHLY" in ts_content
+        # Verify business daily suffix is applied
+        assert "_BUSD" in ts_content
         
     finally:
         if os.path.exists(formulas_file):

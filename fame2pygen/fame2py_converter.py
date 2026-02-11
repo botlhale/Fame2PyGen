@@ -13,7 +13,7 @@ try:
         render_polars_expr, render_conditional_expr, is_numeric_literal,
         is_strict_number, token_to_pl_expr, parse_time_index,
         convert_fame_date_to_iso, normalize_formula_text, split_args_balanced,
-        split_local_db_name, LOCAL_DB_IGNORE
+        split_local_db_name, LOCAL_DB_IGNORE, FAME_FREQ_CANONICAL
     )
 except ImportError:
     # Fallback for direct execution
@@ -22,7 +22,7 @@ except ImportError:
         render_polars_expr, render_conditional_expr, is_numeric_literal,
         is_strict_number, token_to_pl_expr, parse_time_index,
         convert_fame_date_to_iso, normalize_formula_text, split_args_balanced,
-        split_local_db_name, LOCAL_DB_IGNORE
+        split_local_db_name, LOCAL_DB_IGNORE, FAME_FREQ_CANONICAL
     )
 
 # Regex for splitting arithmetic expressions
@@ -256,12 +256,35 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             target = p.get("target")
             point_in_time_by_target[target].append(p)
 
+    # Collect and group CONVERT operations for priority processing
+    convert_formulas = []
+    convert_column_map = {}  # Maps original target alias -> suffixed column name
+    has_converts = False
+    for p in parsed:
+        if p.get("type") == "convert" and p.get("convert_meta"):
+            has_converts = True
+            convert_formulas.append(p)
+
+    # Group converts by (canonical_freq, technique, observed, start_by) for batching
+    convert_groups = defaultdict(list)
+    for cf in convert_formulas:
+        meta = cf["convert_meta"]
+        group_key = (
+            meta.get("target_freq_canonical", ""),
+            meta.get("technique", ""),
+            meta.get("observed", ""),
+            meta.get("start_by") or "",
+        )
+        convert_groups[group_key].append(cf)
+
     # Start building output lines
     lines = []
     lines.append('"""Auto-generated ts_transformer module from FAME commands."""\n\n')
     lines.append("import polars as pl\n")
     lines.append("from datetime import date\n")
     lines.append("from formulas import *\n\n")
+    if has_converts:
+        lines.append("try:\n    import polars_econ as ple\nexcept ImportError:\n    ple = None\n\n")
     lines.append("\n")
     lines.append("def ts_transformer(pdf: pl.DataFrame) -> pl.DataFrame:\n")
     lines.append('    """Apply FAME-to-Polars transformations to the DataFrame."""\n')
@@ -280,6 +303,93 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
         # Mark these as assigned
         for tgt, _, _, _ in shift_pct_backwards_patterns: 
             assigned_columns.add(tgt.upper())
+
+    # 2. Handle CONVERT operations as frequency bridges (priority processing)
+    if convert_groups:
+        lines.append("\n    # ── Frequency Bridge: CONVERT operations (processed first) ──\n")
+
+        for group_key, group_items in sorted(convert_groups.items()):
+            canonical_freq, technique, observed, start_by = group_key
+            freq_info = FAME_FREQ_CANONICAL.get(canonical_freq)
+            if not freq_info:
+                # Unknown frequency — fall back to generic handling
+                continue
+
+            _, to_freq, suffix, basis = freq_info
+
+            # Build descriptive group label
+            freq_label = canonical_freq.replace("_", " ")
+            group_label = f"{freq_label}"
+            if start_by:
+                group_label += f" (start_by={start_by})"
+
+            # Collect column names for this group
+            col_names = []
+            for cf in group_items:
+                meta = cf["convert_meta"]
+                source_series = sanitize_func_name(meta["source_series"]).upper()
+                tgt_alias = target_alias(cf["target"])
+                suffixed_name = f"{source_series}{suffix}"
+                convert_column_map[tgt_alias] = suffixed_name
+                col_names.append(source_series)
+
+                # Mark as processed so level processing skips it
+                tgt_key = cf["target"]
+                processed_keys.add(tgt_key)
+                # Also mark suffixed variants that might appear in formulas dict
+                for fk in list(formulas.keys()):
+                    if formulas[fk] is cf or formulas[fk].get("original_order") == cf.get("original_order"):
+                        processed_keys.add(fk)
+
+                assigned_columns.add(suffixed_name)
+
+            lines.append(f"\n    # Convert group: {group_label} — columns: {col_names}\n")
+            lines.append(f"    {freq_label.replace(' ', '_')}_cols = {col_names}\n")
+            lines.append(f"    for col_name in {freq_label.replace(' ', '_')}_cols:\n")
+            lines.append(f"        if col_name != \"DATE\":\n")
+
+            # Build ple.convert kwargs
+            convert_kwargs = []
+            convert_kwargs.append('date_col="DATE"')
+            convert_kwargs.append('value_col=col_name')
+            # as_freq from first item (typically "*")
+            first_meta = group_items[0]["convert_meta"]
+            as_freq_val = first_meta.get("as_freq", "*")
+            convert_kwargs.append(f'as_freq="{as_freq_val}"')
+            convert_kwargs.append(f'to_freq="{to_freq}"')
+            if basis:
+                convert_kwargs.append(f'basis="{basis}"')
+            if technique:
+                convert_kwargs.append(f'technique="{technique}"')
+            if observed:
+                convert_kwargs.append(f'observed="{observed}"')
+            if start_by:
+                convert_kwargs.append(f'start_by="{start_by}"')
+
+            kwargs_str = ",\n                    ".join(convert_kwargs)
+
+            # Build the complete convert call as a single statement
+            convert_call = (
+                f"ple.convert(\n"
+                f"                    pdf.select([\"DATE\", col_name]),\n"
+                f"                    {kwargs_str})"
+                f'.rename({{col_name: f"{{col_name}}{suffix}"}})'
+            )
+            if canonical_freq == "business":
+                convert_call += '.filter(pl.col("DATE").dt.is_business_day())'
+
+            lines.append(f"            temp_df = {convert_call}\n")
+            lines.append(f"            # Drop duplicate join column if it exists\n")
+            lines.append(f'            if f"{{col_name}}{suffix}_right" in pdf.columns:\n')
+            lines.append(f'                pdf = pdf.drop(f"{{col_name}}{suffix}_right")\n')
+            lines.append(f"            # Join converted data\n")
+            lines.append(f'            pdf = pdf.join(temp_df, on="DATE", how="full").drop("DATE_right")\n')
+
+    # Build substitution map for convert column references in later formulas
+    # This maps the original target alias to the new suffixed column reference
+    convert_ref_map = {}
+    for orig_alias, suffixed_name in convert_column_map.items():
+        convert_ref_map[orig_alias] = suffixed_name
 
     # 2. Process computation levels
     for level_idx, level in enumerate(levels):
@@ -449,8 +559,11 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                         raw_expr = f'SHIFT_PCT(pl.col("{s1}"), pl.col("{s2}"), {off})'
                         expr_code = wrap_with_filter(raw_expr)
 
-                # --- Convert ---
+                # --- Convert (fallback for converts without rich metadata — already handled above) ---
                 elif formula. get("type") == "convert":
+                    # Converts with convert_meta are handled in frequency bridge section
+                    if formula.get("convert_meta"):
+                        continue
                     params = formula.get("params", [])
                     if params: 
                         scol = sanitize_func_name(params[0]).upper()
@@ -507,6 +620,13 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
 
                 # Finalize expression with alias if needed
                 if expr_code:
+                    # Substitute convert target references with suffixed column names
+                    for orig_alias, suffixed_name in convert_ref_map.items():
+                        expr_code = expr_code.replace(
+                            f'pl.col("{orig_alias}")',
+                            f'pl.col("{suffixed_name}")'
+                        )
+
                     # Series functions already include alias, others need it
                     needs_alias = not any(expr_code.startswith(fn) for fn in 
                                          ["ADD_SERIES", "SUB_SERIES", "MUL_SERIES", "DIV_SERIES"])
