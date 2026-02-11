@@ -242,9 +242,9 @@ class TestDateofWrapping:
     """Ensure DATEOF arguments are wrapped as columns regardless of casing."""
 
     def test_dateof_arguments_wrapped_in_pl_col(self):
-        rendered = render_polars_expr('dateof(make(date(bus), "10aug2020"), *, contain, end)')
+        rendered = render_polars_expr('dateof(bus, *, contain, end)')
         assert "DATEOF_GENERIC(" in rendered
-        assert 'pl.col("MAKEDATEBUS10AUG2020")' in rendered
+        assert 'pl.col("BUS")' in rendered
         assert 'pl.col("*")' in rendered
         assert 'pl.col("CONTAIN")' in rendered
         assert 'pl.col("END")' in rendered

@@ -629,7 +629,11 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
 
     def dateof_templ(inner):
         raw_args = split_args_balanced(inner)
-        args = [cleaned for cleaned in (a.strip() for a in raw_args) if cleaned]
+        args = []
+        for a in raw_args:
+            cleaned = a.strip()
+            if cleaned:
+                args.append(cleaned)
         if ctx is not None:
             ctx["has_dateof_generic"] = True
         # When suffix-style arguments are present, continue tracking variants
@@ -646,7 +650,7 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
         for arg in args:
             col_name = sanitize_func_name(arg).upper()
             if not col_name:
-                # Preserve raw token when sanitization strips everything (e.g., '*')
+                # Preserve raw token when sanitization strips everything (e.g., '*'); FAME uses '*' as a wildcard
                 col_name = arg.strip('"\'').strip() or "*"
             wrapped_args.append(f'pl.col("{col_name}")')
         dateof_token = f"__dateof_call_{len(sub_map)}__"
