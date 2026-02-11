@@ -11,6 +11,7 @@ Responsibilities:
 """
 
 import re
+from uuid import uuid4
 from typing import Dict, List, Tuple, Optional, Set
 from collections import defaultdict
 
@@ -650,12 +651,15 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
         for arg in args:
             col_name = sanitize_func_name(arg).upper()
             if not col_name:
-                # If sanitization strips everything (e.g., '*' wildcard), keep the raw token so wildcard semantics remain
+                # If sanitization strips everything (e.g., '*' wildcard), keep the raw token so wildcard semantics remain.
+                # Default to '*' when nothing is left after stripping to preserve FAME's wildcard behavior.
                 col_name = arg.strip('"\'').strip() or "*"
             wrapped_args.append(f'pl.col("{col_name}")')
-        token_id = ctx["_dateof_counter"] if ctx is not None and "_dateof_counter" in ctx else len(sub_map)
         if ctx is not None:
+            token_id = ctx["_dateof_counter"] if "_dateof_counter" in ctx else 0
             ctx["_dateof_counter"] = token_id + 1
+        else:
+            token_id = f"uuid_{uuid4().hex}"
         dateof_token = f"__dateof_call_{token_id}__"
         sub_map[dateof_token] = f"DATEOF_GENERIC({', '.join(wrapped_args)})"
         return dateof_token
