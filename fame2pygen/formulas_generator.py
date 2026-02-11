@@ -656,16 +656,15 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
             col_name = sanitize_func_name(arg).upper()
             stripped_raw = arg.strip('"\'').strip()
             if not col_name:
-                # If sanitization strips everything (e.g., wildcard or punctuation-only arg), keep the raw token.
-                # Default to '*' only when a raw token exists but sanitizes away; skip entirely if nothing remains.
-                if stripped_raw:
-                    col_name = stripped_raw or DATEOF_WILDCARD
-                else:
+                # If sanitization strips everything (e.g., wildcard or punctuation-only arg), keep the raw token; skip if nothing remains.
+                if not stripped_raw:
                     continue
+                col_name = stripped_raw
             wrapped_args.append(f'pl.col("{col_name}")')
         if ctx is not None:
-            token_id = ctx["_dateof_counter"] if "_dateof_counter" in ctx else 0
-            ctx["_dateof_counter"] = token_id + 1
+            current_counter = ctx["_dateof_counter"] if "_dateof_counter" in ctx else 0
+            token_id = str(current_counter)
+            ctx["_dateof_counter"] = current_counter + 1
         else:
             token_id = f"{DATEOF_TOKEN_PREFIX}{uuid4().hex}"
         dateof_token = f"__dateof_call_{token_id}__"
