@@ -243,11 +243,7 @@ class TestDateofWrapping:
 
     def test_dateof_arguments_wrapped_in_pl_col(self):
         rendered = render_polars_expr('dateof(bus, *, contain, end)')
-        assert "DATEOF_GENERIC(" in rendered
-        assert 'pl.col("BUS")' in rendered
-        assert 'pl.col("*")' in rendered
-        assert 'pl.col("CONTAIN")' in rendered
-        assert 'pl.col("END")' in rendered
+        assert rendered == 'DATEOF_GENERIC(pl.col("BUS"), pl.col("*"), pl.col("CONTAIN"), pl.col("END"))'
 
     def test_dateof_case_insensitive_handling(self):
         rendered = render_polars_expr("DaTeOf(Bus)")
