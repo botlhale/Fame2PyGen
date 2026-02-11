@@ -11,7 +11,6 @@ Responsibilities:
 """
 
 import re
-from uuid import uuid4
 from typing import Dict, List, Tuple, Optional, Set
 from collections import defaultdict
 
@@ -42,6 +41,10 @@ FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS | KEYWORDS_TO_SKIP
 
 # Local database prefixes to ignore (treated as main database)
 LOCAL_DB_IGNORE = {"work", "fame"}
+
+# DATEOF helpers
+DATEOF_WILDCARD = "*"
+DATEOF_TOKEN_PREFIX = "uuid_"
 
 
 def split_local_db_name(name: Optional[str]) -> Tuple[Optional[str], str]:
@@ -653,13 +656,14 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
             if not col_name:
                 # If sanitization strips everything (e.g., '*' wildcard), keep the raw token so wildcard semantics remain.
                 # Default to '*' when nothing is left after stripping to preserve FAME's wildcard behavior.
-                col_name = arg.strip('"\'').strip() or "*"
+                col_name = arg.strip('"\'').strip() or DATEOF_WILDCARD
             wrapped_args.append(f'pl.col("{col_name}")')
         if ctx is not None:
             token_id = ctx["_dateof_counter"] if "_dateof_counter" in ctx else 0
             ctx["_dateof_counter"] = token_id + 1
         else:
-            token_id = f"uuid_{uuid4().hex}"
+            from uuid import uuid4
+            token_id = f"{DATEOF_TOKEN_PREFIX}{uuid4().hex}"
         dateof_token = f"__dateof_call_{token_id}__"
         sub_map[dateof_token] = f"DATEOF_GENERIC({', '.join(wrapped_args)})"
         return dateof_token
