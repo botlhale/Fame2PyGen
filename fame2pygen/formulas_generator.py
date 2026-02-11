@@ -11,6 +11,7 @@ Responsibilities:
 """
 
 import re
+from uuid import uuid4
 from typing import Dict, List, Tuple, Optional, Set
 from collections import defaultdict
 
@@ -41,6 +42,10 @@ FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS | KEYWORDS_TO_SKIP
 
 # Local database prefixes to ignore (treated as main database)
 LOCAL_DB_IGNORE = {"work", "fame"}
+
+# DATEOF helpers
+DATEOF_WILDCARD = "*"
+DATEOF_TOKEN_PREFIX = "uuid_"
 
 
 def split_local_db_name(name: Optional[str]) -> Tuple[Optional[str], str]:
@@ -496,7 +501,8 @@ _shift_pct_re = re.compile(
 
 
 def render_conditional_expr(condition: str, then_expr: str, else_expr: str,
-                           substitution_map: Optional[Dict[str, str]] = None) -> str:
+                           substitution_map: Optional[Dict[str, str]] = None,
+                           ctx: Optional[Dict[str, bool]] = None) -> str:
     """Render a conditional expression as Polars when/then/otherwise."""
 
     def clean_wrap(x):
@@ -518,15 +524,15 @@ def render_conditional_expr(condition: str, then_expr: str, else_expr: str,
     def restore_nd(t):
         return t.replace('__ND_PLACEHOLDER__', 'pl.lit(None)')
 
-    cond_expr = render_polars_expr(condition, substitution_map=substitution_map)
+    cond_expr = render_polars_expr(condition, substitution_map=substitution_map, ctx=ctx)
 
     def process_branch(branch):
         branch = replace_nd(branch)
         comps = extract_if_components(branch)
         if comps:
-            res = render_conditional_expr(comps["condition"], comps["then_expr"], comps["else_expr"], substitution_map)
+            res = render_conditional_expr(comps["condition"], comps["then_expr"], comps["else_expr"], substitution_map, ctx=ctx)
         else:
-            res = render_polars_expr(branch, substitution_map=substitution_map)
+            res = render_polars_expr(branch, substitution_map=substitution_map, ctx=ctx)
         return restore_nd(res)
 
     then_polars = process_branch(then_expr)
@@ -565,7 +571,7 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
     # Check for IF expression
     comps = extract_if_components(expr)
     if comps:
-        return render_conditional_expr(comps["condition"], comps["then_expr"], comps["else_expr"], sub_map)
+        return render_conditional_expr(comps["condition"], comps["then_expr"], comps["else_expr"], sub_map, ctx=ctx)
 
     # 1) Global Operator Cleaning
     expr_padded = f" {expr} "
@@ -624,20 +630,48 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
             inner = text[inner_start:  j - 1]. strip()
             out_parts.append(template_fn(inner))
             i = j
-        return "". join(out_parts)
+        return "".join(out_parts)
 
     def dateof_templ(inner):
-        args = split_args_balanced(inner)
+        raw_args = split_args_balanced(inner)
+        args = []
+        for a in raw_args:
+            cleaned = a.strip()
+            if cleaned:
+                args.append(cleaned)
+        if ctx is not None:
+            ctx["has_dateof_generic"] = True
+        # When suffix-style arguments are present, continue tracking variants
+        # DATEOF variants are only defined for suffix-based usage (e.g., contain/end)
         if len(args) >= 3:
-            suffix1 = re.sub(r'[^A-Z0-9]', '', args[-2]. upper())
-            suffix2 = re. sub(r'[^A-Z0-9]', '', args[-1].upper())
-            if ctx is not None: 
-                if "dateof_variants" not in ctx: 
+            suffix1 = re.sub(r'[^A-Z0-9]', '', args[-2].upper())
+            suffix2 = re.sub(r'[^A-Z0-9]', '', args[-1].upper())
+            if ctx is not None:
+                if "dateof_variants" not in ctx:
                     ctx["dateof_variants"] = set()
-                ctx["dateof_variants"]. add((suffix1, suffix2))
-            return f"DATE_{suffix1}_{suffix2}"
+                ctx["dateof_variants"].add((suffix1, suffix2))
+        # Build pl.col-wrapped arguments as a substitution to avoid re-tokenization
+        wrapped_args = []
+        for arg in args:
+            col_name = sanitize_func_name(arg).upper()
+            stripped_raw = arg.strip('"\'').strip()
+            if not col_name:
+                # If sanitization strips everything (e.g., wildcard or punctuation-only arg), try sanitized raw token; skip if nothing remains.
+                if not stripped_raw:
+                    continue
+                fallback = sanitize_func_name(stripped_raw).upper()
+                col_name = fallback if fallback else stripped_raw
+            wrapped_args.append(f'pl.col("{col_name}")')
+        if ctx is not None:
+            current_counter = ctx.get("_dateof_counter", 0)
+            token_id = str(current_counter)
+            ctx["_dateof_counter"] = current_counter + 1
         else:
-            return f"DATEOF_GENERIC({render_polars_expr(inner, sub_map, memory, ctx)})"
+            # render_polars_expr may be used standalone without context; use UUID to avoid token collisions
+            token_id = f"{DATEOF_TOKEN_PREFIX}{uuid4().hex}"
+        dateof_token = f"__dateof_call_{token_id}__"
+        sub_map[dateof_token] = f"DATEOF_GENERIC({', '.join(wrapped_args)})"
+        return dateof_token
 
     expr = process_generic_func(expr, "dateof", dateof_templ)
 
@@ -939,6 +973,7 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
     ctx = defaultdict(bool)
     ctx["dateof_variants"] = set()
     ctx["make_variants"] = set()
+    ctx["has_dateof_generic"] = False
 
     for cmd in fame_cmds: 
         if not cmd: 
@@ -1067,6 +1102,13 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
         defs["EXISTS"] = '''def EXISTS(expr: pl. Expr) -> pl.Expr:
     """Check if expression has non-null values."""
     return expr.is_not_null()'''
+
+    if ctx["has_dateof_generic"]:
+        defs["DATEOF_GENERIC"] = '''def DATEOF_GENERIC(*args: pl.Expr) -> pl.Expr:
+    \"\"\"Placeholder for FAME DATEOF; returns first argument when available.\"\"\"
+    if not args:
+        return pl.lit(None)
+    return args[0]'''
 
     for suffix1, suffix2 in ctx["dateof_variants"]:
         var_name = f"DATE_{suffix1}_{suffix2}"
