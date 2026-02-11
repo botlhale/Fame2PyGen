@@ -124,6 +124,21 @@ result = nlrx(lambda20, y, w1, w2, w3, w4, gss, gpr)
 
 # --- Business-day frequency convert scenario ---
 freq b
-v_daily = convert(v_monthly, 'm', 'b', 'linear', 'end')
+v_daily = convert(v_monthly, b, linear, end)
 freq m
+
+# --- Convert frequency bridge grouping scenarios ---
+# These should be grouped: A and DD share business daily target frequency
+A = convert(A, b, disc, ave, *, off)
+DD = convert(DD, b, discrete, average)
+# This is weekly (start_by wednesday) — separate group
+CC = convert(CC, w(w), disc, ave)
+# Additional convert variations
+E_MON = convert(E, m, disc, ave)
+F_QTRLY = convert(F, q, linear, end)
+G_ANN = convert(G, a, disc, sum)
+H_DD = convert(H, d, linear, end)
+# Dependent formulas referencing converted columns
+TOTAL_BUSD = A + DD
+WEEKLY_RESULT = CC * 2
 
