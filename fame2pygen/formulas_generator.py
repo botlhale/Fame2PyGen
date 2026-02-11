@@ -625,7 +625,7 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
             inner = text[inner_start:  j - 1]. strip()
             out_parts.append(template_fn(inner))
             i = j
-        return "". join(out_parts)
+        return "".join(out_parts)
 
     def dateof_templ(inner):
         raw_args = split_args_balanced(inner)
