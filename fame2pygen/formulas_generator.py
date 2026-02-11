@@ -48,6 +48,173 @@ DATEOF_WILDCARD = "*"
 DATEOF_TOKEN_PREFIX = "uuid_"
 
 
+# ---------- FAME Convert Normalization ----------
+
+# Map FAME frequency aliases to a canonical form and Polars-econ parameters
+# Each entry: canonical_name -> (to_freq for ple.convert, column suffix, basis or None)
+FAME_FREQ_CANONICAL = {
+    "daily":      ("daily",      "1d",  "_DD",    None),
+    "business":   ("business",   "1d",  "_BUSD",  "business"),
+    "weekly":     ("weekly",     "1w",  "_WK",    None),
+    "monthly":    ("monthly",    "1mo", "_MON",   None),
+    "quarterly":  ("quarterly",  "1q",  "_QTRLY", None),
+    "annual":     ("annual",     "1y",  "_ANN",   None),
+}
+
+# Map all known FAME frequency aliases to their canonical name
+_FREQ_ALIAS_MAP = {
+    # Daily
+    "d": "daily", "daily": "daily",
+    # Business daily
+    "b": "business", "bus": "business", "business": "business",
+    # Weekly (with optional day-of-week)
+    "w": "weekly", "weekly": "weekly",
+    # Monthly
+    "m": "monthly", "monthly": "monthly", "mon": "monthly",
+    # Quarterly
+    "q": "quarterly", "quarterly": "quarterly", "qtr": "quarterly",
+    # Annual/Yearly
+    "a": "annual", "annual": "annual", "annually": "annual",
+    "y": "annual", "yearly": "annual",
+}
+
+# Weekly day-of-week aliases (includes FAME single-letter abbreviations)
+_WEEKLY_DAY_ALIAS = {
+    "m": "monday", "mon": "monday", "monday": "monday",
+    "tu": "tuesday", "tue": "tuesday", "tues": "tuesday", "tuesday": "tuesday",
+    "w": "wednesday", "wed": "wednesday", "wednesday": "wednesday",
+    "th": "thursday", "thu": "thursday", "thur": "thursday", "thurs": "thursday", "thursday": "thursday",
+    "f": "friday", "fri": "friday", "friday": "friday",
+    "sa": "saturday", "sat": "saturday", "saturday": "saturday",
+    "su": "sunday", "sun": "sunday", "sunday": "sunday",
+}
+
+# Technique aliases
+_TECHNIQUE_ALIAS = {
+    "disc": "discrete", "discrete": "discrete",
+    "linear": "linear", "lin": "linear",
+    "cubic": "cubic",
+    "constant": "constant", "const": "constant",
+}
+
+# Observed aliases
+_OBSERVED_ALIAS = {
+    "ave": "average", "avg": "average", "average": "average",
+    "sum": "sum",
+    "first": "first",
+    "last": "last",
+    "hi": "high", "high": "high",
+    "lo": "low", "low": "low",
+    "end": "end",
+    "begin": "beginning", "beginning": "beginning",
+    "annualized": "annualized",
+    "formula": "formula",
+}
+
+
+def normalize_convert_frequency(freq_str: str):
+    """
+    Normalize a FAME convert frequency argument to canonical form.
+
+    Handles aliases like b/bus/business, w(wed)/weekly(wednesday), etc.
+
+    Returns:
+        (canonical_name, start_by_day_or_None)
+    """
+    freq_str = freq_str.strip().lower()
+
+    # Check for weekly with day specifier: w(wed), weekly(friday), etc.
+    m = re.match(r"^(w|weekly)\s*\(\s*([a-z]+)\s*\)$", freq_str, re.IGNORECASE)
+    if m:
+        day_raw = m.group(2).lower()
+        day = _WEEKLY_DAY_ALIAS.get(day_raw, day_raw)
+        return "weekly", day
+
+    # Plain lookup
+    canonical = _FREQ_ALIAS_MAP.get(freq_str)
+    if canonical:
+        return canonical, None
+
+    return freq_str, None
+
+
+def normalize_convert_technique(tech_str: str) -> str:
+    """Normalize a FAME convert technique argument."""
+    return _TECHNIQUE_ALIAS.get(tech_str.strip().lower(), tech_str.strip().lower())
+
+
+def normalize_convert_observed(obs_str: str) -> str:
+    """Normalize a FAME convert observed argument."""
+    return _OBSERVED_ALIAS.get(obs_str.strip().lower(), obs_str.strip().lower())
+
+
+def parse_convert_args(args: list) -> dict:
+    """
+    Parse the arguments of a FAME convert() call into structured metadata.
+
+    FAME convert syntax:
+        convert(series, target_freq, technique, observed [, as_freq [, start_by]])
+
+    Returns dict with keys:
+        source_series, target_freq_canonical, to_freq, suffix, basis,
+        technique, observed, as_freq, start_by
+    """
+    result = {
+        "source_series": args[0].strip() if args else "",
+        "target_freq_raw": "",
+        "target_freq_canonical": None,
+        "to_freq": None,
+        "suffix": "",
+        "basis": None,
+        "technique": None,
+        "observed": None,
+        "as_freq": "*",
+        "start_by": None,
+    }
+
+    if len(args) < 2:
+        return result
+
+    # Parse target frequency (arg index 1)
+    freq_raw = args[1].strip().strip("'\"")
+    result["target_freq_raw"] = freq_raw
+    canonical_freq, start_by_from_freq = normalize_convert_frequency(freq_raw)
+    result["target_freq_canonical"] = canonical_freq
+    if start_by_from_freq:
+        result["start_by"] = start_by_from_freq
+
+    # Look up canonical freq details
+    freq_info = FAME_FREQ_CANONICAL.get(canonical_freq)
+    if freq_info:
+        _, to_freq, suffix, basis = freq_info
+        result["to_freq"] = to_freq
+        result["suffix"] = suffix
+        result["basis"] = basis
+
+    # Parse technique (arg index 2, if present)
+    if len(args) >= 3:
+        tech_raw = args[2].strip().strip("'\"")
+        result["technique"] = normalize_convert_technique(tech_raw)
+
+    # Parse observed (arg index 3, if present)
+    if len(args) >= 4:
+        obs_raw = args[3].strip().strip("'\"")
+        result["observed"] = normalize_convert_observed(obs_raw)
+
+    # Parse as_freq (arg index 4, if present) — the source frequency hint
+    if len(args) >= 5:
+        as_freq_raw = args[4].strip().strip("'\"")
+        result["as_freq"] = as_freq_raw
+
+    # Parse start_by (arg index 5, if present) — offset/start_by hint
+    if len(args) >= 6:
+        start_raw = args[5].strip().strip("'\"")
+        if start_raw.lower() not in ("off", ""):
+            result["start_by"] = start_raw.lower()
+
+    return result
+
+
 def split_local_db_name(name: Optional[str]) -> Tuple[Optional[str], str]:
     """
     Split a FAME local database reference of the form DB'SERIES.
@@ -862,7 +1029,14 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         args = [a. strip().strip("'\"") for a in split_args_balanced(args_str)]
         if len(args) >= 1:
             refs = [args[0]] if not is_strict_number(args[0]) else []
-            return {"type": "convert", "target":  target, "refs": refs, "params": args}
+            convert_meta = parse_convert_args(args)
+            return {
+                "type": "convert",
+                "target": target,
+                "refs": refs,
+                "params": args,
+                "convert_meta": convert_meta,
+            }
 
     # Fishvol function
     m_fv = re.match(r"^\s*([A-Za-z0-9_$. ]+)\s*=\s*\$? fishvol_rebase\((.+)\)(\s*[*/+-]. *)?\s*$", clean_s, re. IGNORECASE)
