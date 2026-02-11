@@ -368,16 +368,17 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
 
             kwargs_str = ",\n                    ".join(convert_kwargs)
 
-            lines.append(f"            temp_df = ple.convert(\n")
-            lines.append(f"                    pdf.select([\"DATE\", col_name]),\n")
-            lines.append(f"                    {kwargs_str}")
-            lines.append(f').rename({{col_name: f"{{col_name}}{suffix}"}})')
-
-            # For business daily, filter to business days
+            # Build the complete convert call as a single statement
+            convert_call = (
+                f"ple.convert(\n"
+                f"                    pdf.select([\"DATE\", col_name]),\n"
+                f"                    {kwargs_str})"
+                f'.rename({{col_name: f"{{col_name}}{suffix}"}})'
+            )
             if canonical_freq == "business":
-                lines.append('.filter(pl.col("DATE").dt.is_business_day())')
-            lines.append("\n")
+                convert_call += '.filter(pl.col("DATE").dt.is_business_day())'
 
+            lines.append(f"            temp_df = {convert_call}\n")
             lines.append(f"            # Drop duplicate join column if it exists\n")
             lines.append(f'            if f"{{col_name}}{suffix}_right" in pdf.columns:\n')
             lines.append(f'                pdf = pdf.drop(f"{{col_name}}{suffix}_right")\n')

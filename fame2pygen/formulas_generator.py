@@ -51,7 +51,7 @@ DATEOF_TOKEN_PREFIX = "uuid_"
 # ---------- FAME Convert Normalization ----------
 
 # Map FAME frequency aliases to a canonical form and Polars-econ parameters
-# Each entry: canonical_name -> (to_freq for ple.convert, column suffix, basis or None)
+# Tuple format: (canonical_name, to_freq, column_suffix, basis_or_None)
 FAME_FREQ_CANONICAL = {
     "daily":      ("daily",      "1d",  "_DD",    None),
     "business":   ("business",   "1d",  "_BUSD",  "business"),
@@ -112,7 +112,7 @@ _OBSERVED_ALIAS = {
 }
 
 
-def normalize_convert_frequency(freq_str: str):
+def normalize_convert_frequency(freq_str: str) -> Tuple[str, Optional[str]]:
     """
     Normalize a FAME convert frequency argument to canonical form.
 
