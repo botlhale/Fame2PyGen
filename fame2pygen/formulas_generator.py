@@ -629,11 +629,7 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
 
     def dateof_templ(inner):
         raw_args = split_args_balanced(inner)
-        args = []
-        for a in raw_args:
-            cleaned = a.strip()
-            if cleaned:
-                args.append(cleaned)
+        args = [cleaned for cleaned in (a.strip() for a in raw_args) if cleaned]
         if ctx is not None:
             ctx["has_dateof_generic"] = True
         # When suffix-style arguments are present, continue tracking variants
@@ -650,11 +646,12 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
         for arg in args:
             col_name = sanitize_func_name(arg).upper()
             if not col_name:
+                # Preserve raw token when sanitization strips everything (e.g., '*')
                 col_name = arg.strip('"\'').strip()
             wrapped_args.append(f'pl.col("{col_name}")')
-        token = f"__DATEOF_CALL_{len(sub_map)}__"
-        sub_map[token.lower()] = f"DATEOF_GENERIC({', '.join(wrapped_args)})"
-        return token
+        token_lower = f"__dateof_call_{len(sub_map)}__"
+        sub_map[token_lower] = f"DATEOF_GENERIC({', '.join(wrapped_args)})"
+        return token_lower
 
     expr = process_generic_func(expr, "dateof", dateof_templ)
 
