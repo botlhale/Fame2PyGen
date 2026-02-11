@@ -14,6 +14,7 @@ from fame2pygen.formulas_generator import (
     convert_fame_date_to_iso,
     parse_fame_formula,
     render_conditional_expr,
+    render_polars_expr,
 )
 from fame2pygen.fame2py_converter import generate_test_script
 import tempfile
@@ -235,6 +236,21 @@ class TestConditionalWithNullValues:
         
         assert parsed["type"] == "conditional"
         assert parsed["else_expr"].lower() == "nc"
+
+
+class TestDateofWrapping:
+    """Ensure DATEOF arguments are wrapped as columns regardless of casing."""
+
+    def test_dateof_arguments_wrapped_in_pl_col(self):
+        rendered = render_polars_expr('dateof(make(date(bus), "10aug2020"), *, contain, end)')
+        assert "DATEOF_GENERIC(" in rendered
+        assert rendered.count('pl.col(') >= 4  # all arguments wrapped
+        assert 'pl.col("CONTAIN")' in rendered
+        assert 'pl.col("END")' in rendered
+
+    def test_dateof_case_insensitive_handling(self):
+        rendered = render_polars_expr("DaTeOf(Bus)")
+        assert rendered == 'DATEOF_GENERIC(pl.col("BUS"))'
 
 
 if __name__ == "__main__":
