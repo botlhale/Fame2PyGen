@@ -647,11 +647,11 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
             col_name = sanitize_func_name(arg).upper()
             if not col_name:
                 # Preserve raw token when sanitization strips everything (e.g., '*')
-                col_name = arg.strip('"\'').strip()
+                col_name = arg.strip('"\'').strip() or "*"
             wrapped_args.append(f'pl.col("{col_name}")')
-        token_lower = f"__dateof_call_{len(sub_map)}__"
-        sub_map[token_lower] = f"DATEOF_GENERIC({', '.join(wrapped_args)})"
-        return token_lower
+        dateof_token = f"__dateof_call_{len(sub_map)}__"
+        sub_map[dateof_token] = f"DATEOF_GENERIC({', '.join(wrapped_args)})"
+        return dateof_token
 
     expr = process_generic_func(expr, "dateof", dateof_templ)
 

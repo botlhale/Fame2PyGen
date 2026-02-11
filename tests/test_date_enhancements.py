@@ -244,7 +244,8 @@ class TestDateofWrapping:
     def test_dateof_arguments_wrapped_in_pl_col(self):
         rendered = render_polars_expr('dateof(make(date(bus), "10aug2020"), *, contain, end)')
         assert "DATEOF_GENERIC(" in rendered
-        assert rendered.count('pl.col(') == 4  # all arguments wrapped
+        assert 'pl.col("MAKEDATEBUS10AUG2020")' in rendered
+        assert 'pl.col("*")' in rendered
         assert 'pl.col("CONTAIN")' in rendered
         assert 'pl.col("END")' in rendered
 
