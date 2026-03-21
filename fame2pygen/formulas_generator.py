@@ -346,7 +346,7 @@ def convert_fame_date_to_iso(date_str:  str) -> str:
     }
     m = re.match(r'^(\d{1,2})([A-Za-z]{3})(\d{4})$', date_str)
     if m: 
-        day, mon, yr = int(m. group(1)), m.group(2).lower(), int(m.group(3))
+        day, mon, yr = int(m.group(1)), m.group(2).lower(), int(m.group(3))
         if mon in month_names:
             return f"{yr}-{month_names[mon]:02d}-{day:02d}"
 
@@ -364,7 +364,7 @@ def convert_fame_date_to_iso(date_str:  str) -> str:
     # Month name + year: jan2020 -> 2020-01-01
     m = re.match(r'^([A-Za-z]{3})(\d{4})$', date_str, re.IGNORECASE)
     if m:
-        mon, yr = m. group(1).lower(), int(m.group(2))
+        mon, yr = m.group(1).lower(), int(m.group(2))
         if mon in month_names:
             return f"{yr}-{month_names[mon]:02d}-01"
 
@@ -995,7 +995,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
     # List alias: VAR = {a, b, c}
     m_list = re.match(r"^\s*([A-Za-z0-9_$.']+)\s*=\s*\{(.+)\}\s*$", s)
     if m_list:
-        target, content = m_list. groups()
+        target, content = m_list.groups()
         items = [it.strip() for it in content.split(",")]
         return {"type": "list_alias", "target":  target, "refs": items}
 
