@@ -169,10 +169,10 @@ class TestCodeGeneration:
                 with open("ts_transformer.py", "r") as f:
                     ts_content = f.read()
                 
-                # Check that ADD_SERIES function is defined
-                assert "def ADD_SERIES" in formulas_content
-                # Check that arithmetic in then clause uses proper expression
-                # (May use ADD_SERIES or direct pl.col operations depending on implementation)
+                # Check that conditional expression is properly generated
+                assert "pl.when(" in ts_content
+                # Check that arithmetic in then clause uses proper Polars expressions
+                assert 'pl.col("A")' in ts_content or 'pl.col("B")' in ts_content
             finally:
                 os.chdir(old_cwd)
 
