@@ -29,7 +29,7 @@ class TestLSUMParsing:
         """Test parsing of simple LSUM expression."""
         result = parse_fame_formula("total = lsum(a, b, c)")
         assert result is not None
-        assert result["type"] == "simple"
+        assert result["type"] == "lsum"
         assert result["target"] == "total"
         # lsum should not appear in refs as it's a function
         assert "lsum" not in [r.lower() for r in result["refs"]]
@@ -41,7 +41,7 @@ class TestLSUMParsing:
         """Test parsing LSUM with conditional arguments."""
         result = parse_fame_formula("total = lsum((if a gt 0 then a else 0), (if b gt 0 then b else 0))")
         assert result is not None
-        assert result["type"] == "simple"
+        assert result["type"] == "lsum"
         # lsum should not appear in refs
         assert "lsum" not in [r.lower() for r in result["refs"]]
         # Variables should be in refs
@@ -245,9 +245,8 @@ class TestCodeGenerationWithLSUM:
             # Check that EXISTS function is defined in formulas
             assert "def EXISTS" in formulas_content
             
-            # Check that transformer uses exists (imported from formulas as EXISTS)
-            # The transformer generates lowercase 'exists' which is provided by formulas.py
-            assert "exists" in ts_content.lower()
+            # Check that transformer handles exists() - rendered as is_not_null()
+            assert "is_not_null()" in ts_content.lower()
             
             # Verify code compiles
             compile(formulas_content, formulas_file, 'exec')

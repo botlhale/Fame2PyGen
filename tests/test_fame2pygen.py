@@ -45,7 +45,7 @@ def test_arithmetic_operations():
 def test_time_indexed_variables():
     result = parse_fame_formula("v1 = v2[t+1]")
     assert result["type"] == "simple"
-    assert "v2[t+1]" in result["refs"]
+    assert "v2" in result["refs"]
 
 def test_pct_function():
     result = parse_fame_formula("set v21 = pct(v22[t+1])")
@@ -121,7 +121,7 @@ def test_date_filter_in_generated_code():
         assert "# Date filter: * (all dates)" in content
         
         # Verify the computations are separate (not grouped together)
-        assert "v1" in content and "v4" in content
+        assert "V1" in content and "V4" in content
     finally:
         if os.path.exists(output_file):
             os.unlink(output_file)
@@ -778,7 +778,7 @@ def test_sqrt_transformer_generation():
         with open(transformer_file, 'r') as f:
             content = f.read()
         
-        assert "SQRT" in content
+        assert ".sqrt()" in content  # sqrt rendered as method call
         assert "|" in content  # or operator converted to |
     finally:
         if os.path.exists(transformer_file):

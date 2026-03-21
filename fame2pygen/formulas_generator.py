@@ -28,6 +28,9 @@ LOGICAL_OPERATORS = {"or", "and", "not"}
 # FAME special values that represent missing/null data
 FAME_SPECIAL_VALUES = {"na", "nc", "nd"}
 
+# FAME comparison operators (used in conditional expressions)
+COMPARISON_OPERATORS = {"eq", "ne", "gt", "lt", "ge", "le"}
+
 COMPARISON_MAP = {
     ' eq ': ' == ', ' ne ': ' != ', ' gt ': ' > ', ' lt ': ' < ', ' ge ': ' >= ', ' le ': ' <= '
 }
@@ -38,7 +41,7 @@ KEYWORDS_TO_SKIP = {
     "scalar"
 }
 
-FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS | KEYWORDS_TO_SKIP
+FUNCTION_KEYWORDS = FUNCTION_NAMES | LOGICAL_OPERATORS | KEYWORDS_TO_SKIP | COMPARISON_OPERATORS
 
 # Local database prefixes to ignore (treated as main database)
 LOCAL_DB_IGNORE = {"work", "fame"}
@@ -343,9 +346,9 @@ def convert_fame_date_to_iso(date_str:  str) -> str:
     }
     m = re.match(r'^(\d{1,2})([A-Za-z]{3})(\d{4})$', date_str)
     if m: 
-        day, mon, yr = int(m. group(1)), m.group(2).lower(), int(m.group(3))
+        day, mon, yr = int(m.group(1)), m.group(2).lower(), int(m.group(3))
         if mon in month_names:
-            return f"{yr}-{month_names[mon]:02d}-{day: 02d}"
+            return f"{yr}-{month_names[mon]:02d}-{day:02d}"
 
     # Annual: 2020 -> 2020-01-01
     m = re.match(r'^(\d{4})$', date_str)
@@ -361,9 +364,9 @@ def convert_fame_date_to_iso(date_str:  str) -> str:
     # Month name + year: jan2020 -> 2020-01-01
     m = re.match(r'^([A-Za-z]{3})(\d{4})$', date_str, re.IGNORECASE)
     if m:
-        mon, yr = m. group(1).lower(), int(m.group(2))
+        mon, yr = m.group(1).lower(), int(m.group(2))
         if mon in month_names:
-            return f"{yr}-{month_names[mon]: 02d}-01"
+            return f"{yr}-{month_names[mon]:02d}-01"
 
     # Weekly:  2020.01 -> approximate to start of year + 7*week days
     m = re.match(r'^(\d{4})\.(\d{1,2})$', date_str)
@@ -546,7 +549,7 @@ def token_to_pl_expr(tok: str) -> str:
     col = sanitize_func_name(base_for_col).upper()
     expr = f'pl.col("{col}")'
     if offs != 0:
-        expr = f"{expr}. shift({-offs})"
+        expr = f"{expr}.shift({-offs})"
 
     return expr
 
@@ -759,7 +762,7 @@ def render_polars_expr(rhs: str, substitution_map: Optional[Dict[str, str]] = No
             return f"__SHIFT_PCT__:{ser1}:{ser2}:{offs1}"
 
     # 4) LSUM
-    m_lsum = re. match(r"^\s*lsum\s*\((. +)\)\s*$", expr, re.IGNORECASE)
+    m_lsum = re.match(r"^\s*lsum\s*\((.+)\)\s*$", expr, re.IGNORECASE)
     if m_lsum: 
         if ctx is not None: 
             ctx["has_lsum"] = True
@@ -932,8 +935,16 @@ def _extract_refs_from_expr(expr: str) -> List[str]:
             continue
         if t_lower in FAME_SPECIAL_VALUES:
             continue
+        # Skip standalone 't' (represents DATE column in FAME)
+        if t_lower == 't':
+            continue
         # Extract base name (without time index)
         base, _ = parse_time_index(t)
+        # Also check for date index (e.g., gdp["2019-12-31"])
+        if base == t:
+            date_base, _ = parse_date_index(t)
+            if date_base:
+                base = date_base
         db_prefix, series_name = split_local_db_name(base)
         ref_name = f"{db_prefix}'{series_name}" if db_prefix else series_name
         if ref_name and not is_strict_number(ref_name):
@@ -963,11 +974,11 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             args = [a.strip() for a in split_args_balanced(m_nlrx.group(1))]
             # Extract refs from args (skip first arg which is lambda)
             refs = [sanitize_func_name(a) for a in args[1:] if not is_strict_number(a)]
-            return {"type": "nlrx", "target": target. strip(), "args": args, "refs": refs}
+            return {"type": "nlrx", "target": target.strip(), "params": args, "refs": refs}
 
     # Inline date range:  set <date X to Y> VAR = expr
     m_inline_date = re. match(
-        r"^\s*set\s+<date\s+(. +? )\s+to\s+(.+?)>\s*([A-Za-z0-9_$.']+)\s*=\s*(.+)$",
+        r"^\s*set\s+<date\s+(.+?)\s+to\s+(.+?)>\s*([A-Za-z0-9_$.']+)\s*=\s*(.+)$",
         s, re.IGNORECASE
     )
     if m_inline_date: 
@@ -982,14 +993,14 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         }
 
     # List alias: VAR = {a, b, c}
-    m_list = re.match(r"^\s*([A-Za-z0-9_$. ]+)\s*=\s*\{(. +)\}\s*$", s)
+    m_list = re.match(r"^\s*([A-Za-z0-9_$.']+)\s*=\s*\{(.+)\}\s*$", s)
     if m_list:
-        target, content = m_list. groups()
+        target, content = m_list.groups()
         items = [it.strip() for it in content.split(",")]
         return {"type": "list_alias", "target":  target, "refs": items}
 
     # Scalar Assignment
-    m_scalar = re.match(r"^\s*scalar\s+([A-Za-z0-9_$.']+)\s*=\s*(. +)$", s, re.IGNORECASE)
+    m_scalar = re.match(r"^\s*scalar\s+([A-Za-z0-9_$.']+)\s*=\s*(.+)$", s, re.IGNORECASE)
     if m_scalar: 
         target, rhs = m_scalar.groups()
         refs = _extract_refs_from_expr(rhs)
@@ -1006,7 +1017,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
         return {"type":  "date", "filter": None}
 
     # Date filter: date X to Y
-    m_date_range = re.match(r"^\s*date\s+(. +?)\s+to\s+(. +? )\s*$", s, re. IGNORECASE)
+    m_date_range = re.match(r"^\s*date\s+(.+?)\s+to\s+(.+?)\s*$", s, re.IGNORECASE)
     if m_date_range:
         return {"type": "date", "filter": {"start": m_date_range.group(1).strip(), "end": m_date_range.group(2).strip()}}
 
@@ -1032,7 +1043,7 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             convert_meta = parse_convert_args(args)
             return {
                 "type": "convert",
-                "target": target,
+                "target": target.strip(),
                 "refs": refs,
                 "params": args,
                 "convert_meta": convert_meta,
@@ -1052,6 +1063,22 @@ def parse_fame_formula(line: str) -> Optional[Dict]:
             pairs = list(zip(vols, prices))
             variable_refs = [s for s in vols + prices if not is_strict_number(s)]
             return {"type": "fishvol", "target": target, "refs": variable_refs, "pairs": pairs, "year": year}
+
+    # FIRSTVALUE function
+    m_fv = re.match(r"^\s*([A-Za-z0-9_$.']+)\s*=\s*firstvalue\s*\((.+)\)\s*$", clean_s, re.IGNORECASE)
+    if m_fv:
+        target_fv, series_fv = m_fv.groups()
+        series_fv = series_fv.strip()
+        refs = [series_fv] if not is_strict_number(series_fv) else []
+        return {"type": "firstvalue", "target": target_fv.strip(), "series": series_fv, "refs": refs}
+
+    # LASTVALUE function
+    m_lv = re.match(r"^\s*([A-Za-z0-9_$.']+)\s*=\s*lastvalue\s*\((.+)\)\s*$", clean_s, re.IGNORECASE)
+    if m_lv:
+        target_lv, series_lv = m_lv.groups()
+        series_lv = series_lv.strip()
+        refs = [series_lv] if not is_strict_number(series_lv) else []
+        return {"type": "lastvalue", "target": target_lv.strip(), "series": series_lv, "refs": refs}
 
     # General assignment:  VAR = expr
     if "=" in clean_s: 
@@ -1134,7 +1161,7 @@ def _parse_chain_top_level(line: str) -> Optional[Dict]:
         refs = [var for _, var in terms]
         return {
             "type":  chain_type. lower(),
-            "target": target,
+            "target": target.strip(),
             "terms": terms,
             "year": year,
             "refs": refs
@@ -1173,6 +1200,12 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
             ctx["has_nlrx"] = True
         if re.search(r"\blsum\s*\(", s, re.IGNORECASE):
             ctx["has_lsum"] = True
+        if re.search(r"\bfirstvalue\s*\(", s, re.IGNORECASE):
+            ctx["has_firstvalue"] = True
+        if re.search(r"\blastvalue\s*\(", s, re.IGNORECASE):
+            ctx["has_lastvalue"] = True
+        if re.search(r"\bexists\s*\(", s, re.IGNORECASE):
+            ctx["has_exists"] = True
 
         if re.match(r'^\s*[A-Za-z0-9_$. ]+\s*\[\s*["\']', s) or re.match(r'^\s*[A-Za-z0-9_$. ]+\s*\[\s*(\d{4}|12)', s, re.IGNORECASE):
             ctx["need_point_in_time_assign"] = True
@@ -1264,18 +1297,29 @@ def generate_polars_functions(fame_cmds: List[str]) -> Dict[str, str]:
     return expr.sqrt()'''
 
     if ctx["has_lsum"]: 
-        defs["LSUM"] = '''def LSUM(args: List[pl. Expr]) -> pl.Expr:
+        defs["LSUM"] = '''def LSUM(args: List[pl.Expr]) -> pl.Expr:
     """Sum expressions with null-safe handling (nulls treated as 0)."""
     if not args:
         return pl.lit(0)
-    result = args[0]. fill_null(0)
-    for arg in args[1:]: 
-        result = result + arg. fill_null(0)
+    result = args[0].fill_null(0)
+    for arg in args[1:]:
+        result = result + arg.fill_null(0)
     return result'''
 
-        defs["EXISTS"] = '''def EXISTS(expr: pl. Expr) -> pl.Expr:
+    if ctx["has_exists"] or ctx["has_lsum"]:
+        defs["EXISTS"] = '''def EXISTS(expr: pl.Expr) -> pl.Expr:
     """Check if expression has non-null values."""
     return expr.is_not_null()'''
+
+    if ctx["has_firstvalue"]:
+        defs["FIRSTVALUE"] = '''def FIRSTVALUE(expr: pl.Expr) -> pl.Expr:
+    """Return the first non-null value of a series."""
+    return expr.drop_nulls().first()'''
+
+    if ctx["has_lastvalue"]:
+        defs["LASTVALUE"] = '''def LASTVALUE(expr: pl.Expr) -> pl.Expr:
+    """Return the last non-null value of a series."""
+    return expr.drop_nulls().last()'''
 
     if ctx["has_dateof_generic"]:
         defs["DATEOF_GENERIC"] = '''def DATEOF_GENERIC(*args: pl.Expr) -> pl.Expr:

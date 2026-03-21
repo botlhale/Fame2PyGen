@@ -94,10 +94,30 @@ def get_computation_levels(adj:  defaultdict, in_degree: defaultdict) -> List[Li
 
 
 def _collect_operands_and_ops(rhs:  str) -> Tuple[List[str], List[str]]:
-    """Split an arithmetic expression into operands and operators."""
-    parts = ARITH_SPLIT_RE. split(rhs)
-    operands = [p.strip() for p in parts if p.strip() and p not in "+-*/"]
-    ops = [p for p in parts if p in "+-*/"]
+    """Split an arithmetic expression into operands and operators at the top level only."""
+    # Only split on operators that are not inside parentheses
+    operands = []
+    ops = []
+    current = []
+    depth = 0
+    for ch in rhs:
+        if ch == '(':
+            depth += 1
+            current.append(ch)
+        elif ch == ')':
+            depth -= 1
+            current.append(ch)
+        elif ch in '+-*/' and depth == 0:
+            operand = ''.join(current).strip()
+            if operand:
+                operands.append(operand)
+            ops.append(ch)
+            current = []
+        else:
+            current.append(ch)
+    operand = ''.join(current).strip()
+    if operand:
+        operands.append(operand)
     return operands, ops
 
 
@@ -106,6 +126,9 @@ def _operand_to_pl_expr(tok: str) -> str:
     tok = tok.strip()
     if is_strict_number(tok):
         return f"pl.lit({tok})"
+    # If the operand contains parentheses or special characters, use full rendering
+    if '(' in tok or ')' in tok:
+        return render_polars_expr(tok)
     return f'pl.col("{sanitize_func_name(tok).upper()}")'
 
 
@@ -425,7 +448,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             formula_type = formula.get("type")
             
             # These types need isolated handling
-            if formula_type in ("point_in_time_assign", "scalar", "nlrx"):
+            if formula_type in ("point_in_time_assign", "scalar", "nlrx", "firstvalue", "lastvalue"):
                 if current_group: 
                     groups. append((current_group_filter, current_group))
                     current_group = []
@@ -489,7 +512,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 tgt_key = group_targets[0]
                 formula = formulas[tgt_key]
                 tgt_alias = target_alias(formula["target"])
-                args = formula.get("args", [])
+                args = formula.get("params", [])
                 
                 lines.append(f"\n    # NLRX computation: {tgt_alias}\n")
                 
@@ -504,10 +527,32 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             if ftype == "point_in_time_assign":
                 continue
 
+            # --- HANDLE FIRSTVALUE ---
+            if ftype == "firstvalue":
+                tgt_key = group_targets[0]
+                formula = formulas[tgt_key]
+                tgt_alias = target_alias(formula["target"])
+                series = sanitize_func_name(formula.get("series", "")).upper()
+                lines.append(f"\n    # FIRSTVALUE: {tgt_alias}\n")
+                lines.append(f'    pdf = pdf.with_columns([(pl.col("{series}")).first().alias("{tgt_alias}")])\n')
+                assigned_columns.add(tgt_alias)
+                continue
+
+            # --- HANDLE LASTVALUE ---
+            if ftype == "lastvalue":
+                tgt_key = group_targets[0]
+                formula = formulas[tgt_key]
+                tgt_alias = target_alias(formula["target"])
+                series = sanitize_func_name(formula.get("series", "")).upper()
+                lines.append(f"\n    # LASTVALUE: {tgt_alias}\n")
+                lines.append(f'    pdf = pdf.with_columns([(pl.col("{series}")).last().alias("{tgt_alias}")])\n')
+                assigned_columns.add(tgt_alias)
+                continue
+
             # --- HANDLE COLUMN OPERATIONS ---
             # Add comment for date filter if present
             if group_filter is not None and group_filter is not _NO_DATE_FILTER_SET:
-                lines.append(f"\n    # Date filter:  {group_filter['start']} to {group_filter['end']}\n")
+                lines.append(f"\n    # Date filter: {group_filter['start']} to {group_filter['end']}\n")
             elif group_filter is None and len(group_targets) > 0:
                 lines.append(f"\n    # Date filter: * (all dates)\n")
             
@@ -598,8 +643,13 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     raw_expr = f'FISHVOL([{pairs_str}], pl.col("DATE"), {year})'
                     expr_code = wrap_with_filter(raw_expr)
 
+                # --- Scalar literal assignment ---
+                elif formula.get("type") == "assign_series":
+                    raw_expr = f"pl.lit({rhs_text})"
+                    expr_code = wrap_with_filter(raw_expr)
+
                 # --- Simple assignment or arithmetic ---
-                elif formula.get("type") in ("simple", "assign_series"):
+                elif formula.get("type") == "simple":
                     operands, ops = _collect_operands_and_ops(rhs_text)
                     
                     # Determine if we can use an optimized series function
@@ -630,7 +680,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                     # Series functions already include alias, others need it
                     needs_alias = not any(expr_code.startswith(fn) for fn in 
                                          ["ADD_SERIES", "SUB_SERIES", "MUL_SERIES", "DIV_SERIES"])
-                    if needs_alias and not expr_code. endswith(f'. alias("{tgt_alias}")'):
+                    if needs_alias and not expr_code.endswith(f'.alias("{tgt_alias}")'):
                         expr_code = f'{expr_code}.alias("{tgt_alias}")'
                     
                     cols_code.append(expr_code)
@@ -676,10 +726,10 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
                 
                 if idx == 0:
                     chain_parts.append(f'pl.when(pl.col("DATE") == pl.lit("{iso_date}").cast(pl.Date))')
-                    chain_parts.append(f'. then({val_expr})')
+                    chain_parts.append(f'.then({val_expr})')
                 else:
-                    chain_parts.append(f'. when(pl.col("DATE") == pl.lit("{iso_date}").cast(pl.Date))')
-                    chain_parts.append(f'. then({val_expr})')
+                    chain_parts.append(f'.when(pl.col("DATE") == pl.lit("{iso_date}").cast(pl.Date))')
+                    chain_parts.append(f'.then({val_expr})')
             
             # Add otherwise clause
             if tgt_alias in assigned_columns: 
@@ -687,7 +737,7 @@ def generate_test_script(cmds: List[str], out_filename: str = "ts_transformer.py
             else:
                 chain_parts.append('.otherwise(pl.lit(None))')
             
-            chain_parts.append(f'. alias("{tgt_alias}")')
+            chain_parts.append(f'.alias("{tgt_alias}")')
             
             # Write the expression
             expr_str = ''.join(chain_parts)
